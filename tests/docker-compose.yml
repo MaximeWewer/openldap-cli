@@ -1,0 +1,52 @@
+# Self-contained test OpenLDAP, faithful to MaximeWewer/OpenLDAP-docker-setup
+# (standalone). Bootstrap (cn=config + seed data) is done by bootstrap.sh BEFORE
+# this compose starts, via slapadd into ./data/slapd.d.
+networks:
+  ldap-internal:
+    driver: bridge
+
+services:
+  openldap:
+    image: cleanstart/openldap:2.6.13
+    container_name: openldap-test
+    hostname: openldap
+    restart: unless-stopped
+    ports:
+      - "389:389"
+      - "636:636"
+    volumes:
+      - ./certs:/etc/openldap/certs:ro
+      - ./data/slapd.d:/etc/openldap/slapd.d
+      - ./data/openldap-data:/var/lib/openldap/openldap-data
+      - ./data/accesslog-data:/var/lib/openldap/accesslog-data
+    networks:
+      - ldap-internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # Optional GUI — handy while developing the CLI. Comment out if not needed.
+  phpldapadmin:
+    image: phpldapadmin/phpldapadmin:2.3.11
+    container_name: phpldapadmin-test
+    hostname: phpldapadmin
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - APP_TIMEZONE=Europe/Paris
+      - APP_URL=http://localhost:8080
+      - LDAP_HOST=openldap
+      - LDAP_CONNECTION=ldap
+      - LDAP_PORT=389
+      - LDAP_BASE_DN=dc=example,dc=org
+      - LDAP_USERNAME=cn=phpldapadmin,ou=service-accounts,dc=example,dc=org
+      - LDAP_PASSWORD=phpldapadmin
+      - LDAP_LOGIN_ATTR=uid
+      - LDAP_LOGIN_ATTR_DESC=Username
+    depends_on:
+      - openldap
+    networks:
+      - ldap-internal

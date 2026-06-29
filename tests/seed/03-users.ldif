@@ -1,0 +1,28 @@
+dn: cn=admin,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: admin
+sn: admin
+uid: admin
+displayName: Administrator
+mail: admin@example.org
+userPassword: adminpassword
+
+dn: cn=user1.name,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: user1.name
+sn: name
+givenName: user1
+uid: user1.name
+displayName: User1 Name
+mail: user1.name@example.org
+userPassword: user1password
+
+dn: cn=user2.name,ou=users,dc=example,dc=org
+objectClass: inetOrgPerson
+cn: user2.name
+sn: name
+givenName: user2
+uid: user2.name
+displayName: User2 Name
+mail: user2.name@example.org
+userPassword: user2password

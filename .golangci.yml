@@ -1,0 +1,91 @@
+# golangci-lint configuration — single static-analysis gate (gofmt/goimports,
+# govet+shadow, errcheck, ineffassign, staticcheck, gocyclo, misspell, unused).
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    # base
+    - errcheck
+    - gocyclo
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+    # correctness
+    - errorlint
+    - nilerr
+    - nilnil
+    - reassign
+    - predeclared
+    - exhaustive
+    - bodyclose
+    # dead code / waste
+    - unconvert
+    - unparam
+    - wastedassign
+    # modern Go
+    - usestdlibvars
+    - copyloopvar
+    - intrange
+    - perfsprint
+    # broad diagnostics + hygiene
+    - gocritic
+    - nolintlint
+  settings:
+    staticcheck:
+      # real correctness checks (SA*, S*) minus the opinionated stylistic
+      # ST* and quick-fix QF* hints.
+      checks:
+        - "all"
+        - "-ST*"
+        - "-QF*"
+    gocyclo:
+      min-complexity: 20
+    govet:
+      enable:
+        - shadow
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - fmt.Fprintf # writes to stdout/buffers — errors not actionable
+        - fmt.Fprintln
+        - fmt.Fprint
+    misspell:
+      locale: US
+    exhaustive:
+      # a `default:` branch counts as covering the remaining enum cases
+      default-signifies-exhaustive: true
+    perfsprint:
+      # keep the real perf wins (Sprintf->Itoa) but don't force errors.New
+      # over fmt.Errorf for static strings (pure churn, no correctness gain)
+      errorf: false
+  exclusions:
+    paths:
+      - tests/data # container runtime data (not Go)
+    rules:
+      # test files may ignore errors, run hotter, and shadow `err`
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocyclo
+          - govet
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/MaximeWewer/openldap-cli
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

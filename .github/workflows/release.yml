@@ -1,0 +1,142 @@
+name: release
+
+# Manually triggered. Computes a CalVer YYYY.M.X version (or uses force_version),
+# cross-builds static binaries, and publishes a GitHub Release that creates the
+# v<version> tag. Mirrors the prepare -> build -> release pattern of the exporter.
+on:
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Override version (format YYYY.M.X, no leading v). Empty = auto-increment."
+        required: false
+        type: string
+
+permissions:
+  contents: write # create the tag + release
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # need tags + history
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          FORCE="${{ inputs.force_version }}"
+          if [ -n "$FORCE" ]; then
+            echo "$FORCE" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$' \
+              || { echo "::error::force_version must be YYYY.M.X"; exit 1; }
+            V="$FORCE"
+          else
+            YEAR=$(date -u +%Y)
+            MONTH=$(date -u +%-m) # no leading zero
+            PREFIX="v${YEAR}.${MONTH}."
+            LAST=$(git tag -l "${PREFIX}*" | sed "s|^${PREFIX}||" | sort -n | tail -1)
+            if [ -z "$LAST" ]; then PATCH=0; else PATCH=$((LAST + 1)); fi
+            V="${YEAR}.${MONTH}.${PATCH}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: v$V"
+
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0" # pure-Go static binary, no libc dependency
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          VERSION="v${{ needs.prepare.outputs.version }}"
+          NAME="openldap-cli_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p dist
+
+          # -s -w : smallest binary (no symbols/DWARF); -trimpath : no local paths
+          # -tags netgo : pure-Go resolver; -X ...version : stamp the version
+          LDFLAGS="-s -w -X github.com/MaximeWewer/openldap-cli/internal/cli.version=${VERSION}"
+
+          if [ "$GOOS" = "windows" ]; then
+            go build -trimpath -tags netgo -ldflags "$LDFLAGS" -o "dist/${NAME}.exe" ./cmd/openldap-cli
+          else
+            go build -trimpath -tags netgo -ldflags "$LDFLAGS" -o openldap-cli ./cmd/openldap-cli
+            tar -czf "dist/${NAME}.tar.gz" openldap-cli
+          fi
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 1
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum * > checksums.txt && cat checksums.txt
+
+      - name: Release notes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PREV=$(git tag -l 'v*' | sort -V | tail -1 || true)
+          {
+            echo "Static binaries for Linux / macOS / Windows (amd64 + arm64)."
+            echo "Verify downloads against \`checksums.txt\`."
+            echo
+            echo "### Changes"
+            git log -10 --pretty='- %s (%h)'
+            echo
+            if [ -n "$PREV" ]; then
+              echo "**Full diff:** https://github.com/${REPO}/compare/${PREV}...v${VERSION}"
+            fi
+          } > notes.md
+          cat notes.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.prepare.outputs.version }}
+          name: Release ${{ needs.prepare.outputs.version }}
+          body_path: notes.md
+          draft: false
+          prerelease: false
+          files: dist/*
+          fail_on_unmatched_files: true

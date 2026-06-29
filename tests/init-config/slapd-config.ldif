@@ -1,0 +1,118 @@
+dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcPidFile: /run/openldap/slapd.pid
+olcArgsFile: /run/openldap/slapd.args
+
+dn: cn=module{0},cn=config
+objectClass: olcModuleList
+cn: module{0}
+olcModulePath: /usr/lib/openldap
+olcModuleLoad: back_mdb.so
+olcModuleLoad: back_monitor.so
+olcModuleLoad: memberof.so
+olcModuleLoad: refint.so
+olcModuleLoad: ppolicy.so
+olcModuleLoad: dynlist.so
+olcModuleLoad: accesslog.so
+
+dn: cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: schema
+include: file:///etc/openldap/schema/core.ldif
+include: file:///etc/openldap/schema/cosine.ldif
+include: file:///etc/openldap/schema/inetorgperson.ldif
+include: file:///etc/openldap/schema/dyngroup.ldif
+
+dn: olcDatabase={-1}frontend,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcFrontendConfig
+olcDatabase: {-1}frontend
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+olcRootDN: cn=adminconfig,cn=config
+olcRootPW: configpassword
+olcAccess: {0}to * by dn.exact="cn=adminconfig,cn=config" manage by * none
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: {1}mdb
+olcSuffix: dc=example,dc=org
+olcDbDirectory: /var/lib/openldap/openldap-data
+olcRootDN: cn=admin,dc=example,dc=org
+olcRootPW: rootpassword
+olcDbMaxSize: 1073741824
+olcDbIndex: objectClass eq
+olcDbIndex: cn,sn,uid eq,pres,sub
+olcDbIndex: mail eq,sub
+olcDbIndex: member eq
+olcMonitoring: TRUE
+olcAccess: {0}to attrs=userPassword by self write by dn.exact="cn=admin,ou=users,dc=example,dc=org" write by dn.exact="cn=ssp,ou=service-accounts,dc=example,dc=org" write by anonymous auth by * none
+olcAccess: {1}to dn.subtree="ou=policies,dc=example,dc=org" by * read
+olcAccess: {2}to dn.subtree="ou=service-accounts,dc=example,dc=org" by dn.exact="cn=admin,ou=users,dc=example,dc=org" write by * none
+olcAccess: {3}to dn.subtree="ou=groups,dc=example,dc=org" by dn.exact="cn=admin,ou=users,dc=example,dc=org" write by dn.exact="cn=phpldapadmin,ou=service-accounts,dc=example,dc=org" read by * none
+olcAccess: {4}to dn.subtree="ou=users,dc=example,dc=org" by self write by dn.exact="cn=admin,ou=users,dc=example,dc=org" write by dn.exact="cn=phpldapadmin,ou=service-accounts,dc=example,dc=org" read by dn.exact="cn=adminconfig,cn=config" read by * none
+olcAccess: {5}to dn.base="dc=example,dc=org" by dn.exact="cn=admin,ou=users,dc=example,dc=org" write by * read
+
+dn: olcOverlay=memberof,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcMemberOf
+olcOverlay: memberof
+olcMemberOfRefInt: TRUE
+olcMemberOfGroupOC: groupOfNames
+olcMemberOfMemberAD: member
+olcMemberOfMemberOfAD: memberOf
+
+dn: olcOverlay=refint,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcRefintConfig
+olcOverlay: refint
+olcRefintAttribute: uniqueMember
+olcRefintAttribute: member
+olcRefintAttribute: memberOf
+
+dn: olcOverlay=ppolicy,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcPPolicyConfig
+olcOverlay: ppolicy
+olcPPolicyDefault: cn=defaultppolicy,ou=policies,dc=example,dc=org
+olcPPolicyHashCleartext: TRUE
+
+dn: olcOverlay=dynlist,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcDynListConfig
+olcOverlay: dynlist
+olcDynListAttrSet: groupOfUrls memberURL member+memberOf@groupOfNames
+
+dn: olcDatabase={2}mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: {2}mdb
+olcSuffix: cn=accesslog
+olcDbDirectory: /var/lib/openldap/accesslog-data
+olcRootDN: cn=adminconfig,cn=config
+olcDbMaxSize: 1073741824
+olcDbIndex: reqStart eq
+olcDbIndex: reqDN eq
+olcDbIndex: reqType eq
+olcDbIndex: reqResult eq
+olcAccess: {0}to * by dn.exact="cn=adminconfig,cn=config" read by * none
+
+dn: olcOverlay=accesslog,olcDatabase={1}mdb,cn=config
+objectClass: olcOverlayConfig
+objectClass: olcAccessLogConfig
+olcOverlay: accesslog
+olcAccessLogDB: cn=accesslog
+olcAccessLogOps: writes bind
+olcAccessLogSuccess: FALSE
+olcAccessLogPurge: 07+00:00 01+00:00
+
+dn: olcDatabase={3}monitor,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMonitorConfig
+olcDatabase: {3}monitor
+olcAccess: {0}to dn.subtree="cn=Monitor" by dn.exact="cn=adminconfig,cn=config" read by * none
+olcMonitoring: TRUE

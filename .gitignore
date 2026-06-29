@@ -1,0 +1,10 @@
+/openldap-cli
+/dist/
+*.yaml
+!.openldap-cli.example.yaml
+
+# test env runtime artifacts
+tests/data/
+tests/certs/
+tests/seed/_combined.ldif
+tests/init-config/_combined.ldif

@@ -1,0 +1,227 @@
+//go:build e2e
+
+// End-to-end CLI tests: build the real binary and drive every command group
+// against the tests/ OpenLDAP. Run with `make e2e` (after `make test-up`).
+// Skipped automatically if the directory is unreachable.
+package e2e
+
+import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
+
+var binPath string
+
+const (
+	admin = "cn=admin,ou=users,dc=example,dc=org"
+	root  = "cn=admin,dc=example,dc=org" // rootDN, for ou=policies / cn=config writes
+	adPW  = "adminpassword"
+	rtPW  = "rootpassword"
+)
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "openldap-cli-e2e")
+	if err != nil {
+		panic(err)
+	}
+	binPath = dir + "/openldap-cli"
+	build := exec.Command("go", "build", "-o", binPath, "../cmd/openldap-cli")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+func env(bindDN, bindPW string) []string {
+	return append(os.Environ(),
+		"LDAP_URL=ldap://localhost:389",
+		"LDAP_BASE_DN=dc=example,dc=org",
+		"LDAP_BIND_DN="+bindDN,
+		"LDAP_BIND_PW="+bindPW,
+		"LDAP_USER_OU=ou=users",
+		"LDAP_GROUP_OU=ou=groups",
+		"LDAP_POLICY_OU=ou=policies",
+		"LDAP_MAIL_DOMAIN=example.org",
+		"LDAP_CONFIG_BIND_DN=cn=adminconfig,cn=config",
+		"LDAP_CONFIG_BIND_PW=configpassword",
+	)
+}
+
+// try runs the binary without failing the test (used for setup/cleanup).
+func try(bindDN, bindPW string, args ...string) (stdout, stderr string, err error) {
+	full := append([]string{"--config", "/nonexistent-e2e.yaml", "--log-level", "error"}, args...)
+	cmd := exec.Command(binPath, full...)
+	cmd.Env = env(bindDN, bindPW)
+	var so, se strings.Builder
+	cmd.Stdout, cmd.Stderr = &so, &se
+	err = cmd.Run()
+	return so.String(), se.String(), err
+}
+
+// run runs the binary and fails the test on a non-zero exit.
+func run(t *testing.T, bindDN, bindPW string, args ...string) string {
+	t.Helper()
+	so, se, err := try(bindDN, bindPW, args...)
+	if err != nil {
+		t.Fatalf("%v\n  exit: %v\n  stderr: %s", args, err, se)
+	}
+	return so
+}
+
+func has(t *testing.T, s, sub string) {
+	t.Helper()
+	if !strings.Contains(s, sub) {
+		t.Errorf("missing %q in:\n%s", sub, s)
+	}
+}
+
+func cleanup() {
+	// delete each individually — a single missing login would abort a variadic
+	// `users delete`, leaving the rest behind.
+	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon"} {
+		try(admin, adPW, "user", "delete", u)
+	}
+	try(admin, adPW, "group", "delete", "e2e.devs")
+	try(admin, adPW, "svc", "delete", "e2e.svc")
+	try(admin, adPW, "ou", "delete", "e2e.unit", "--parent", "ou=users,dc=example,dc=org")
+	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
+}
+
+func TestCLI(t *testing.T) {
+	if _, _, err := try(admin, adPW, "whoami"); err != nil {
+		t.Skipf("test ldap not available (run `make test-up`): %v", err)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	t.Run("general", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "whoami"), "cn=admin,ou=users")
+		has(t, run(t, admin, adPW, "version"), "openldap-cli")
+		has(t, run(t, admin, adPW, "search", "(uid=user1.name)", "--attrs", "uid"), "user1.name")
+	})
+
+	t.Run("user", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "user", "add", "e2e.alpha", "--no-password", "--set", "title=Engineer", "--set", "bogus=x"),
+			`attribute "bogus" not in schema`)
+		has(t, run(t, admin, adPW, "user", "info", "e2e.alpha"), "e2e.alpha")
+
+		js := run(t, admin, adPW, "-o", "json", "user", "info", "e2e.alpha")
+		var info map[string]any
+		if err := json.Unmarshal([]byte(js), &info); err != nil {
+			t.Fatalf("json info: %v\n%s", err, js)
+		}
+		if info["uid"] != "e2e.alpha" {
+			t.Errorf("json uid = %v", info["uid"])
+		}
+
+		run(t, admin, adPW, "user", "set", "e2e.alpha", "description", "Pioneer")
+		run(t, admin, adPW, "user", "passwd", "e2e.alpha", "--password", "LongPassword12345")
+		run(t, admin, adPW, "user", "force-reset", "e2e.alpha")
+		has(t, run(t, admin, adPW, "user", "info", "e2e.alpha"), "mustChange")
+		run(t, admin, adPW, "user", "force-reset", "e2e.alpha", "--clear")
+		has(t, run(t, admin, adPW, "user", "rename", "e2e.alpha", "e2e.beta"), "e2e.beta")
+		has(t, run(t, admin, adPW, "user", "unlock", "e2e.beta"), "unlocked")
+
+		// plain login (no dot) is accepted -> uid/cn/sn = login
+		has(t, run(t, admin, adPW, "user", "add", "e2edemo1", "--no-password"), "cn=e2edemo1,ou=users")
+		has(t, run(t, admin, adPW, "user", "info", "e2edemo1"), "e2edemo1")
+		run(t, admin, adPW, "user", "delete", "e2edemo1")
+	})
+
+	t.Run("group", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "group", "create", "e2e.devs", "--member", "e2e.beta"), "created")
+		has(t, run(t, admin, adPW, "group", "info", "e2e.devs"), "e2e.beta")
+		run(t, admin, adPW, "group", "add-member", "e2e.devs", "user1.name")
+		has(t, run(t, admin, adPW, "groups", "list"), "e2e.devs")
+		run(t, admin, adPW, "group", "remove-member", "e2e.devs", "user1.name")
+	})
+
+	t.Run("bulk", func(t *testing.T) {
+		csv := tmpFile(t, "login\ne2e.gamma\ne2e.delta\n")
+		has(t, run(t, admin, adPW, "users", "import", csv), "imported 2")
+		has(t, run(t, admin, adPW, "users", "list"), "e2e.gamma")
+		run(t, admin, adPW, "users", "set", "title", "Temp", "e2e.gamma", "e2e.delta")
+		has(t, run(t, admin, adPW, "users", "passwd", "e2e.gamma"), "e2e.gamma")
+		has(t, run(t, admin, adPW, "users", "export"), "e2e.beta")
+		has(t, run(t, admin, adPW, "users", "export", "--ldif"), "dn: cn=e2e.beta")
+
+		ldifFile := tmpFile(t, "dn: cn=e2e.epsilon,ou=users,dc=example,dc=org\nobjectClass: inetOrgPerson\ncn: e2e.epsilon\nsn: Eps\n")
+		has(t, run(t, admin, adPW, "import-ldif", ldifFile), "imported 1")
+		has(t, run(t, admin, adPW, "user", "info", "e2e.epsilon"), "e2e.epsilon")
+
+		// partial bulk delete: one existing + one missing -> per-item, not abort
+		out := run(t, admin, adPW, "users", "delete", "e2e.delta", "e2e.ghost.missing")
+		has(t, out, "1 ok, 1 failed")
+		has(t, out, "e2e.ghost.missing")
+	})
+
+	t.Run("svc", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "svc", "add", "e2e.svc", "--subtree", "ou=users,dc=example,dc=org", "--access", "read"), "created")
+		has(t, run(t, admin, adPW, "svcs", "list"), "e2e.svc")
+		has(t, run(t, admin, adPW, "svc", "info", "e2e.svc"), "e2e.svc")
+		has(t, run(t, admin, adPW, "svc", "delete", "e2e.svc"), "removed 1 ACL clause")
+	})
+
+	t.Run("ou", func(t *testing.T) {
+		parent := "ou=users,dc=example,dc=org"
+		has(t, run(t, admin, adPW, "ou", "create", "e2e.unit", "--parent", parent), "created")
+		has(t, run(t, admin, adPW, "ou", "list"), "e2e.unit")
+		run(t, admin, adPW, "ou", "delete", "e2e.unit", "--parent", parent)
+	})
+
+	t.Run("ppolicy", func(t *testing.T) {
+		has(t, run(t, root, rtPW, "ppolicy", "set", "e2e.pol", "--min-length", "12", "--max-failure", "3"), "created")
+		has(t, run(t, admin, adPW, "ppolicy", "list"), "e2e.pol")
+		has(t, run(t, admin, adPW, "ppolicy", "show", "e2e.pol"), "pwdMinLength")
+		run(t, admin, adPW, "ppolicy", "assign", "e2e.beta", "e2e.pol")
+		has(t, run(t, admin, adPW, "user", "info", "e2e.beta"), "e2e.pol")
+		run(t, admin, adPW, "ppolicy", "assign", "e2e.beta", "--clear")
+		run(t, root, rtPW, "ppolicy", "delete", "e2e.pol")
+	})
+
+	t.Run("config", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "config", "db", "list"), "olcDatabase")
+		has(t, run(t, admin, adPW, "config", "overlay", "list"), "olcOverlay")
+		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"), "olcAccess")
+		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
+		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
+	})
+
+	t.Run("schema", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "schema", "list-classes"), "inetOrgPerson")
+		has(t, run(t, admin, adPW, "schema", "show", "inetOrgPerson"), "NAME 'inetOrgPerson'")
+	})
+
+	t.Run("ops", func(t *testing.T) {
+		has(t, run(t, admin, adPW, "ops", "db-stats"), "dc=example,dc=org")
+		has(t, run(t, admin, adPW, "ops", "monitor"), "connections")
+		has(t, run(t, admin, adPW, "ops", "who-can-write", admin), "dn.exact")
+		has(t, run(t, admin, adPW, "ops", "audit-binds", "--since", "1h"), "binds in last")
+		has(t, run(t, admin, adPW, "ops", "accesslog-purge", "--dry-run"), "dry-run")
+		has(t, run(t, admin, adPW, "ops", "replication"), "contextCSN")
+	})
+
+	t.Run("profile", func(t *testing.T) {
+		// profile commands read the (nonexistent) config file gracefully
+		_, _, _ = try(admin, adPW, "profile", "current")
+	})
+}
+
+func tmpFile(t *testing.T, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), "e2e-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	return f.Name()
+}

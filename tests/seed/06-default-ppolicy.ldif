@@ -1,0 +1,15 @@
+dn: cn=defaultppolicy,ou=policies,dc=example,dc=org
+objectClass: applicationProcess
+objectClass: pwdPolicy
+cn: defaultppolicy
+pwdAttribute: userPassword
+pwdMinLength: 16
+pwdMaxAge: 31536000
+pwdExpireWarning: 604800
+pwdInHistory: 5
+pwdCheckQuality: 1
+pwdMaxFailure: 3
+pwdLockout: TRUE
+pwdLockoutDuration: 1800
+pwdMustChange: TRUE
+pwdAllowUserChange: TRUE

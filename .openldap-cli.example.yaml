@@ -1,0 +1,50 @@
+# Copy to ~/.openldap-cli.yaml and edit. Any field can be overridden by env
+# vars (LDAP_URL, LDAP_BASE_DN, LDAP_BIND_DN, LDAP_BIND_PW, LDAP_USER_OU,
+# LDAP_GROUP_OU, LDAP_MAIL_DOMAIN, LDAP_START_TLS, LDAP_INSECURE).
+
+default: test
+
+profiles:
+  # matches tests/ (make test-up). Plaintext ldap://389, cleartext admin.
+  test:
+    url: ldap://localhost:389
+    base_dn: dc=example,dc=org
+    bind_dn: cn=admin,ou=users,dc=example,dc=org
+    bind_pw: adminpassword
+    user_ou: ou=users
+    group_ou: ou=groups
+    policy_ou: ou=policies
+    mail_domain: example.org
+    # second bind for cn=config writes (svc ACL injection). Test-only known pw.
+    config_bind_dn: cn=adminconfig,cn=config
+    config_bind_pw: configpassword
+
+  # same test server, bound as the rootDN (bypasses ACLs). Needed for writes to
+  # ou=policies (ppolicy set) and arbitrary OUs under the base. Test-only known pw.
+  test-root:
+    url: ldap://localhost:389
+    base_dn: dc=example,dc=org
+    bind_dn: cn=admin,dc=example,dc=org
+    bind_pw: rootpassword
+    user_ou: ou=users
+    group_ou: ou=groups
+    policy_ou: ou=policies
+    mail_domain: example.org
+
+  dev:
+    url: ldaps://localhost:636
+    base_dn: dc=example,dc=org
+    bind_dn: cn=admin,dc=example,dc=org
+    bind_pw: ""            # better: export LDAP_BIND_PW=...
+    user_ou: ou=people
+    group_ou: ou=groups
+    mail_domain: example.org
+    insecure: true          # dev only: skip TLS cert verify
+
+  prod:
+    url: ldaps://ldap.example.org:636
+    base_dn: dc=example,dc=org
+    bind_dn: cn=admin,dc=example,dc=org
+    user_ou: ou=people
+    group_ou: ou=groups
+    mail_domain: example.org
