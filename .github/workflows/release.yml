@@ -116,13 +116,18 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # The v$VERSION tag is created by the publish step below, so the latest
+          # existing tag here is the PREVIOUS release. List only the commits added
+          # since it (PREV..HEAD), not a fixed window of history.
           PREV=$(git tag -l 'v*' | sort -V | tail -1 || true)
+          if [ -n "$PREV" ]; then RANGE="${PREV}..HEAD"; else RANGE=""; fi
           {
             echo "Static binaries for Linux / macOS / Windows (amd64 + arm64)."
             echo "Verify downloads against \`checksums.txt\`."
             echo
             echo "### Changes"
-            git log -10 --pretty='- %s (%h)'
+            # shellcheck disable=SC2086
+            git log $RANGE --no-merges --pretty='- %s (%h)' || true
             echo
             if [ -n "$PREV" ]; then
               echo "**Full diff:** https://github.com/${REPO}/compare/${PREV}...v${VERSION}"
