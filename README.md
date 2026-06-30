@@ -25,6 +25,9 @@ openldap-cli users delete --filter '(title=Intern)' --yes
   `cn=Monitor` stats, accesslog audits — first-class commands.
 - **Multi-environment.** Named profiles (`--profile prod`), env overrides, a
   separate config bind for `cn=config` writes.
+- **Scales past the size limit.** Bulk reads and `backup` page automatically and
+  transparently lift `olcSizeLimit` via the config bind — no truncated lists, no
+  manual server tuning.
 
 ## Install
 
@@ -215,11 +218,11 @@ an orphan `to <subtree> by * none` (same as the bash script).
 
 ### backup (logical LDIF over the wire — no docker/shell/volume needed)
 
-| Command                                              | Notes                                                                                                        |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `backup data <file> [--operational] [--page-size N]` | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Paged → `olcSizeLimit` never truncates |
-| `backup config <file> [--page-size N]`               | dump `cn=config` (config bind). Inspection / DR record — **not** restorable live over LDAP                   |
-| `backup restore <file> [--stop-on-error]`            | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                          |
+| Command                                   | Notes                                                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` (see below) so nothing is truncated |
+| `backup config <file>`                    | dump `cn=config` (config bind). Inspection / DR record — **not** restorable live over LDAP                                                             |
+| `backup restore <file> [--stop-on-error]` | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                                                                    |
 
 Restore strips server-managed attributes (`entryUUID`, `entryCSN`,
 `structuralObjectClass`, `memberOf`, ppolicy timers …) and sends the **Relax**
@@ -267,11 +270,17 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   data admin, password-bearing entries fail the policy check. `backup` is a
   logical dump — for config-tree / replication-state recovery, keep a
   `slapcat`/filesystem backup.
-- **Listing >500 users:** `users list` / `users export` use paged results, but
-  OpenLDAP's `olcSizeLimit` (default 500) is enforced per bound identity and
-  caps the total. Raise it with `config limits set --size 5000` (global) or
-  `config limits set --for 'dn.exact=<admin-dn>' --size unlimited --db 'olcDatabase={1}mdb,cn=config'`
-  (per-identity), or bind as the rootDN. (Bulk `users import` has no such limit.)
+- **Listing >500 entries is handled for you.** OpenLDAP's `olcSizeLimit`
+  (default 500) caps results per bound identity, and RFC 2696 paging does **not**
+  bypass it. So `users list` / `users export` / `groups list` / `backup data` (and
+  the `--group` / `--filter` selectors) page automatically and, if the server
+  caps the result, **temporarily lift the limit via the config bind** (a scoped
+  `olcLimits` override on the data database), return everything, then restore
+  `olcLimits` — logging a warning when they do. This needs a working
+  `config_bind_dn` / `config_bind_pw`; without one (or with bad config
+  credentials) you get a clear error telling you to set the config bind or bind
+  as the rootDN — never a silent truncation. (Bulk `users import` has no such limit.)
+  Prefer a permanent fix? `config limits set --for 'dn.exact=<admin-dn>' --size unlimited --db 'olcDatabase={1}mdb,cn=config'`.
 
 ## Layout
 

@@ -74,7 +74,7 @@ var groupListCmd = &cobra.Command{
 		if groupListMembers {
 			attrs = append(attrs, "member")
 		}
-		entries, err := cli.Search(cli.GroupBase(), "(objectClass=groupOfNames)", attrs)
+		entries, err := searchAll(cli, cli.GroupBase(), "(objectClass=groupOfNames)", attrs)
 		if err != nil {
 			return fmt.Errorf("search groups: %w", err)
 		}

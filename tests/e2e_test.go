@@ -224,6 +224,25 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "user", "info", "e2e.bak"), "e2e.bak")
 	})
 
+	t.Run("sizelimit", func(t *testing.T) {
+		db := "olcDatabase={1}mdb,cn=config"
+		// cap below the number of users: a naive read fails with code 4. The CLI
+		// must transparently lift the limit via the config bind and still return
+		// everyone, then restore olcLimits.
+		run(t, root, rtPW, "config", "set", db, "olcSizeLimit", "1")
+		t.Cleanup(func() { try(root, rtPW, "config", "set", db, "olcSizeLimit", "500") })
+
+		out := run(t, admin, adPW, "users", "list")
+		has(t, out, "user1.name")
+		has(t, out, "user2.name")
+
+		// the temporary per-identity override must be gone afterwards
+		lim := run(t, admin, adPW, "config", "limits", "get", "--db", db)
+		if strings.Contains(lim, "olcLimits") && strings.Contains(lim, admin) {
+			t.Errorf("temporary olcLimits not reverted:\n%s", lim)
+		}
+	})
+
 	t.Run("profile", func(t *testing.T) {
 		// profile commands read the (nonexistent) config file gracefully
 		_, _, _ = try(admin, adPW, "profile", "current")

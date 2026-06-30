@@ -65,8 +65,8 @@ func resolveUserTargets(cli *ldapx.Client, logins []string, sel *userSelectors) 
 		if gerr != nil {
 			return nil, nil, gerr
 		}
-		es, serr := cli.SearchPaged(cli.UserBase(),
-			"(&(objectClass=inetOrgPerson)(memberOf="+ldapx.EscapeFilter(g.DN)+"))", attrs, 250)
+		es, serr := searchAll(cli, cli.UserBase(),
+			"(&(objectClass=inetOrgPerson)(memberOf="+ldapx.EscapeFilter(g.DN)+"))", attrs)
 		if serr != nil {
 			return nil, nil, serr
 		}
@@ -75,7 +75,7 @@ func resolveUserTargets(cli *ldapx.Client, logins []string, sel *userSelectors) 
 		}
 	}
 	if sel.filter != "" {
-		es, serr := cli.SearchPaged(cli.UserBase(), sel.filter, attrs, 250)
+		es, serr := searchAll(cli, cli.UserBase(), sel.filter, attrs)
 		if serr != nil {
 			return nil, nil, fmt.Errorf("filter search: %w", serr)
 		}
@@ -84,7 +84,7 @@ func resolveUserTargets(cli *ldapx.Client, logins []string, sel *userSelectors) 
 		}
 	}
 	if sel.allLocked {
-		es, serr := cli.SearchPaged(cli.UserBase(), "(pwdAccountLockedTime=*)", attrs, 250)
+		es, serr := searchAll(cli, cli.UserBase(), "(pwdAccountLockedTime=*)", attrs)
 		if serr != nil {
 			return nil, nil, serr
 		}

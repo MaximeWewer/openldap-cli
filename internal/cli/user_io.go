@@ -193,7 +193,7 @@ var userExportCmd = &cobra.Command{
 		}
 
 		if userExportLDIF {
-			entries, serr := cli.SearchPaged(cli.UserBase(), filter, nil, 250)
+			entries, serr := searchAll(cli, cli.UserBase(), filter, nil)
 			if serr != nil {
 				return fmt.Errorf("search users: %w", serr)
 			}
@@ -205,7 +205,7 @@ var userExportCmd = &cobra.Command{
 		if userExportWithHash {
 			cols = append(cols, "userPassword")
 		}
-		entries, err := cli.SearchPaged(cli.UserBase(), filter, cols, 250)
+		entries, err := searchAll(cli, cli.UserBase(), filter, cols)
 		if err != nil {
 			return fmt.Errorf("search users: %w", err)
 		}

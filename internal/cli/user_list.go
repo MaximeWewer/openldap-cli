@@ -44,7 +44,7 @@ var userListCmd = &cobra.Command{
 		}
 		filter := "(&" + strings.Join(filters, "") + ")"
 
-		entries, err := cli.SearchPaged(cli.UserBase(), filter, []string{"uid", "cn", "displayName", "mail"}, 250)
+		entries, err := searchAll(cli, cli.UserBase(), filter, []string{"uid", "cn", "displayName", "mail"})
 		if err != nil {
 			return fmt.Errorf("search users: %w", err)
 		}

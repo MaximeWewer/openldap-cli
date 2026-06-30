@@ -103,6 +103,18 @@ func connect() (*ldapx.Client, error) {
 	return ldapx.Connect(cfg)
 }
 
+// searchAll runs a size-limit-transparent bulk subtree search. When the server
+// caps the result and the limit is lifted via the config bind, it logs a
+// warning so the (otherwise invisible) cn=config write is observable.
+func searchAll(cli *ldapx.Client, base, filter string, attrs []string) ([]*ldapx.Entry, error) {
+	entries, escalated, err := cli.SearchAll(base, filter, attrs)
+	if escalated {
+		log.Warn().Str("base", base).Int("entries", len(entries)).
+			Msg("server size limit hit; temporarily lifted via the config bind to return all entries")
+	}
+	return entries, err
+}
+
 // connectConfig opens a second client bound as the config rootDN, for cn=config
 // writes. Errors if config_bind_dn is not set.
 func connectConfig() (*ldapx.Client, error) {

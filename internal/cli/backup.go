@@ -16,7 +16,6 @@ import (
 )
 
 var (
-	backupPageSize    uint32
 	backupOperational bool
 	restoreStopOnErr  bool
 )
@@ -128,7 +127,7 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 	if backupOperational {
 		attrs = []string{"*", "+"} // user + operational
 	}
-	entries, err := cli.SearchPaged(base, "(objectClass=*)", attrs, backupPageSize)
+	entries, err := searchAll(cli, base, "(objectClass=*)", attrs)
 	if err != nil {
 		return fmt.Errorf("dump %s: %w", base, err)
 	}
@@ -220,9 +219,7 @@ func (r dumpResult) Text() string {
 }
 
 func init() {
-	backupDataCmd.Flags().Uint32Var(&backupPageSize, "page-size", 500, "paged-search page size (transparent pagination)")
 	backupDataCmd.Flags().BoolVar(&backupOperational, "operational", false, "include operational attributes (full-fidelity dump, not restorable)")
-	backupConfigCmd.Flags().Uint32Var(&backupPageSize, "page-size", 500, "paged-search page size (transparent pagination)")
 	backupRestoreCmd.Flags().BoolVar(&restoreStopOnErr, "stop-on-error", false, "abort on the first failing entry")
 
 	backupCmd.AddCommand(backupDataCmd, backupConfigCmd, backupRestoreCmd)
