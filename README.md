@@ -213,6 +213,22 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                       |
 | `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits` |
 
+### backup (logical LDIF over the wire — no docker/shell/volume needed)
+
+| Command                                              | Notes                                                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `backup data <file> [--operational] [--page-size N]` | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Paged → `olcSizeLimit` never truncates |
+| `backup config <file> [--page-size N]`               | dump `cn=config` (config bind). Inspection / DR record — **not** restorable live over LDAP                   |
+| `backup restore <file> [--stop-on-error]`            | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                          |
+
+Restore strips server-managed attributes (`entryUUID`, `entryCSN`,
+`structuralObjectClass`, `memberOf`, ppolicy timers …) and sends the **Relax**
+control so a pre-hashed `userPassword` is accepted under a strict ppolicy — but
+Relax is only honored for the **rootDN**, so run restores with a rootDN profile.
+This is a logical backup; it **complements**, and does not replace, a
+filesystem / `slapcat` backup (operational/replication state and the config tree
+are not restorable over the wire).
+
 ### schema
 
 | Command                                     | Notes                                             |
@@ -246,6 +262,11 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 - **`user passwd` generate mode** is rejected by a long `pwdMinLength`; pass
   `--password`.
 - **`user export --with-hash`** prints password hashes — sensitive output.
+- **`backup restore` needs the rootDN:** the Relax control (re-adding a
+  `userPassword` under a strict ppolicy) is only honored for the rootDN. As a
+  data admin, password-bearing entries fail the policy check. `backup` is a
+  logical dump — for config-tree / replication-state recovery, keep a
+  `slapcat`/filesystem backup.
 - **Listing >500 users:** `users list` / `users export` use paged results, but
   OpenLDAP's `olcSizeLimit` (default 500) is enforced per bound identity and
   caps the total. Raise it with `config limits set --size 5000` (global) or
@@ -376,3 +397,21 @@ openldap-cli ops who-can-write 'cn=admin,ou=users,dc=example,dc=org'
 openldap-cli search '(mail=*@example.org)' --attrs uid,mail
 openldap-cli -o json search '(&(objectClass=inetOrgPerson)(title=SRE))' | jq -r '.entries[].dn'
 ```
+
+### Backup & restore (no docker/alpine — just the CLI)
+
+```bash
+# Dump the data tree to a gzipped LDIF (paged: olcSizeLimit never truncates)
+openldap-cli backup data "backup_data_$(date +%Y%m%d).ldif.gz"
+
+# Full-fidelity dump incl. operational attributes (inspection, not restorable)
+openldap-cli backup data --operational full_dump.ldif.gz
+
+# Config tree dump — inspection / DR record only (config bind)
+openldap-cli --profile prod-root backup config backup_config.ldif.gz
+
+# Restore — bind as the rootDN so the Relax control is honored
+openldap-cli --profile prod-root backup restore backup_data_20260630.ldif.gz
+```
+
+> Dumps contain password hashes — store them on an encrypted partition.

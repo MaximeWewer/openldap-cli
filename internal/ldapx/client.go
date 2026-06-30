@@ -65,6 +65,18 @@ func (c *Client) AddEntry(dn string, attrs map[string][]string) error {
 	return c.conn.Add(req)
 }
 
+// AddEntryRelax creates an entry with the Relax Rules control, so the server
+// accepts values a normal add would reject — notably a pre-hashed userPassword
+// under a strict ppolicy (pwdCheckQuality) during a restore.
+func (c *Client) AddEntryRelax(dn string, attrs map[string][]string) error {
+	relax := ldap.NewControlString("1.3.6.1.4.1.4203.666.5.12", true, "")
+	req := ldap.NewAddRequest(dn, []ldap.Control{relax})
+	for name, vals := range attrs {
+		req.Attribute(name, vals)
+	}
+	return c.conn.Add(req)
+}
+
 // Delete removes the entry at dn.
 func (c *Client) Delete(dn string) error { return c.conn.Del(ldap.NewDelRequest(dn, nil)) }
 

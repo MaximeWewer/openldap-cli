@@ -84,7 +84,7 @@ func has(t *testing.T, s, sub string) {
 func cleanup() {
 	// delete each individually — a single missing login would abort a variadic
 	// `users delete`, leaving the rest behind.
-	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon"} {
+	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak"} {
 		try(admin, adPW, "user", "delete", u)
 	}
 	try(admin, adPW, "group", "delete", "e2e.devs")
@@ -205,6 +205,23 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "ops", "audit-binds", "--since", "1h"), "binds in last")
 		has(t, run(t, admin, adPW, "ops", "accesslog-purge", "--dry-run"), "dry-run")
 		has(t, run(t, admin, adPW, "ops", "replication"), "contextCSN")
+	})
+
+	t.Run("backup", func(t *testing.T) {
+		gz := t.TempDir() + "/data.ldif.gz"
+
+		// throwaway user -> dump -> delete -> restore from the gz -> back
+		run(t, admin, adPW, "user", "add", "e2e.bak", "--password", "LongPassword12345")
+		has(t, run(t, admin, adPW, "backup", "data", gz), "backed up")
+		if fi, err := os.Stat(gz); err != nil || fi.Size() == 0 {
+			t.Fatalf("gz not written: %v", err)
+		}
+
+		run(t, admin, adPW, "user", "delete", "e2e.bak")
+		// restore binds as rootDN: the Relax control (to re-add a userPassword
+		// under a strict ppolicy) is only honored for the rootDN.
+		has(t, run(t, root, rtPW, "backup", "restore", gz), "imported")
+		has(t, run(t, admin, adPW, "user", "info", "e2e.bak"), "e2e.bak")
 	})
 
 	t.Run("profile", func(t *testing.T) {
