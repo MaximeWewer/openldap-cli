@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldaptime"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
@@ -54,6 +55,15 @@ var opsDBStatsCmd = &cobra.Command{
 			suffix := e.Get("namingContexts")
 			used := atoi(e.Get("olmMDBPagesUsed"))
 			maxPages := atoi(e.Get("olmMDBPagesMax"))
+			free := atoi(e.Get("olmMDBPagesFree"))
+			maxBytes, _ := strconv.ParseInt(maxBySuffix[suffix], 10, 64)
+
+			// LMDB page size = maxSize / maxPages (4096 in practice); fall back to
+			// the usual 4 KiB when olcDbMaxSize is unset so byte figures still hold.
+			pageSize := int64(4096)
+			if maxBytes > 0 && maxPages > 0 {
+				pageSize = maxBytes / int64(maxPages)
+			}
 			pct := 0.0
 			if maxPages > 0 {
 				pct = float64(used) / float64(maxPages) * 100
@@ -61,10 +71,12 @@ var opsDBStatsCmd = &cobra.Command{
 			res.Databases = append(res.Databases, dbStat{
 				Suffix:    suffix,
 				Entries:   atoi(e.Get("olmMDBEntries")),
-				MaxSize:   maxBySuffix[suffix],
+				MaxBytes:  maxBytes,
+				UsedBytes: int64(used) * pageSize,
+				FreeBytes: int64(free) * pageSize,
 				PagesUsed: used,
 				PagesMax:  maxPages,
-				PagesFree: atoi(e.Get("olmMDBPagesFree")),
+				PagesFree: free,
 				UsagePct:  pct,
 			})
 		}
@@ -75,7 +87,9 @@ var opsDBStatsCmd = &cobra.Command{
 type dbStat struct {
 	Suffix    string  `json:"suffix" yaml:"suffix"`
 	Entries   int     `json:"entries" yaml:"entries"`
-	MaxSize   string  `json:"maxSize,omitempty" yaml:"maxSize,omitempty"`
+	MaxBytes  int64   `json:"maxBytes,omitempty" yaml:"maxBytes,omitempty"`
+	UsedBytes int64   `json:"usedBytes" yaml:"usedBytes"`
+	FreeBytes int64   `json:"freeBytes" yaml:"freeBytes"`
 	PagesUsed int     `json:"pagesUsed" yaml:"pagesUsed"`
 	PagesMax  int     `json:"pagesMax" yaml:"pagesMax"`
 	PagesFree int     `json:"pagesFree" yaml:"pagesFree"`
@@ -89,9 +103,14 @@ type dbStatsResult struct {
 func (r dbStatsResult) Text() string {
 	var b strings.Builder
 	for _, d := range r.Databases {
+		maxStr := "?"
+		if d.MaxBytes > 0 {
+			maxStr = humanize.Bytes(d.MaxBytes)
+		}
 		fmt.Fprintf(&b, "%s\n", d.Suffix)
-		fmt.Fprintf(&b, "  entries: %d  pages: %d/%d used (%.1f%%)  free: %d  maxSize: %s\n",
-			d.Entries, d.PagesUsed, d.PagesMax, d.UsagePct, d.PagesFree, d.MaxSize)
+		fmt.Fprintf(&b, "  entries: %d  used: %s / %s (%.1f%%)  free: %s  (%d/%d pages)\n",
+			d.Entries, humanize.Bytes(d.UsedBytes), maxStr, d.UsagePct,
+			humanize.Bytes(d.FreeBytes), d.PagesUsed, d.PagesMax)
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

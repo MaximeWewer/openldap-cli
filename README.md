@@ -48,8 +48,8 @@ make install    # -> $GOBIN/openldap-cli
 ## Testing & checks
 
 ```bash
-make unit         # pure unit tests (no server): acl, config, domain, ldaptime,
-                  # ldapx façade, ldif, output, pwd, schema
+make unit         # pure unit tests (no server): acl, config, domain, humanize,
+                  # ldaptime, ldapx façade, ldif, output, pwd, schema
 make integration  # ldapx façade vs the test LDAP — run `make test-up` first
 make e2e          # build the binary + drive every command group end-to-end
 make lint         # golangci-lint (~23 linters; config in .golangci.yml)
@@ -199,7 +199,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 
 | Command                                                                | Notes                                                                          |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `ops db-stats`                                                         | per-DB entries + MDB page usage % (catch `MDB_MAP_FULL`)                       |
+| `ops db-stats`                                                         | per-DB entries + used/max size (human-readable) and page usage % (catch `MDB_MAP_FULL`) |
 | `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                               |
 | `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                         |
 | `ops who-can-write <dn>`                                               | `olcAccess` rules referencing a DN (read manually)                             |
