@@ -96,7 +96,9 @@ var userAddCmd = &cobra.Command{
 		// password: explicit, none, or generated (default).
 		password, generated := userAddPassword, false
 		if !userAddNoPassword && password == "" {
-			if password, err = pwd.Strong(20); err != nil {
+			// size the generated password to the effective policy (the user does
+			// not exist yet, so this resolves the default pwdMinLength).
+			if password, err = pwd.Strong(genLength(cli, "")); err != nil {
 				return err
 			}
 			generated = true

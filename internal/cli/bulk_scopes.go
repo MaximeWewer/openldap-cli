@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
-	"github.com/MaximeWewer/openldap-cli/internal/pwd"
 )
 
 // Plural command scopes (users/groups/svcs) = bulk actions, distinct from the
@@ -265,17 +264,17 @@ var usersPasswdCmd = &cobra.Command{
 			return fmt.Errorf("selector matched %d user(s) — pass --yes to reset their passwords", len(targets))
 		}
 
+		// resolve the default policy length once (bulk users typically share it);
+		// each set still retries stronger on a per-user constraint violation.
+		startLen := genLength(cli, "")
 		res := passwdBatchResult{Failed: missing}
 		for _, t := range targets {
-			p, gerr := pwd.Strong(20)
+			p, gerr := setGeneratedPasswordLen(cli, t.DN, startLen)
 			if gerr != nil {
-				return gerr
-			}
-			if _, serr := cli.SetPassword(t.DN, p); serr != nil {
-				res.Failed = append(res.Failed, importIssue{t.DN, serr.Error()})
+				res.Failed = append(res.Failed, importIssue{t.DN, gerr.Error()})
 				if usersPasswdSel.stopOnErr {
 					_ = out.Emit(res)
-					return fmt.Errorf("stopped at %s: %w", t.DN, serr)
+					return fmt.Errorf("stopped at %s: %w", t.DN, gerr)
 				}
 				continue
 			}

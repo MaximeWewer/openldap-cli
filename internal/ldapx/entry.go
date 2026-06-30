@@ -84,3 +84,9 @@ func EscapeFilter(s string) string { return ldap.EscapeFilter(s) }
 func IsNoSuchAttribute(err error) bool {
 	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchAttribute)
 }
+
+// IsConstraintViolation reports whether err is LDAP "constraint violation"
+// (code 19) — e.g. a password rejected by the quality policy.
+func IsConstraintViolation(err error) bool {
+	return ldap.IsErrorWithCode(err, ldap.LDAPResultConstraintViolation)
+}

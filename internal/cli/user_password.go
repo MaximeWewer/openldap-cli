@@ -17,7 +17,7 @@ var userPasswdValue string
 var userPasswdCmd = &cobra.Command{
 	Use:   "passwd <login>",
 	Short: "Set a user's password (Password Modify ext-op; ppolicy hashes it)",
-	Long:  "Sets the password via the LDAP Password Modify extended operation. Omit\n--password to have the server generate one and print it.",
+	Long:  "Sets the password via the LDAP Password Modify extended operation. Omit\n--password to generate a strong one, sized to the effective ppolicy\n(pwdMinLength), and print it.",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		login := strings.ToLower(strings.TrimSpace(args[0]))
@@ -31,9 +31,20 @@ var userPasswdCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		gen, err := cli.SetPassword(entry.DN, userPasswdValue)
-		if err != nil {
-			return fmt.Errorf("set password for %s: %w", entry.DN, err)
+
+		// When no password is given, generate one CLIENT-side sized to the
+		// effective ppolicy, retrying stronger if rejected. (The server's own
+		// Password Modify generator returns a short password that a non-trivial
+		// pwdMinLength/quality policy would reject.)
+		gen := ""
+		if userPasswdValue == "" {
+			p, gerr := setGeneratedPassword(cli, entry.DN)
+			if gerr != nil {
+				return gerr
+			}
+			gen = p
+		} else if _, serr := cli.SetPassword(entry.DN, userPasswdValue); serr != nil {
+			return fmt.Errorf("set password for %s: %w", entry.DN, serr)
 		}
 		log.Info().Str("dn", entry.DN).Msg("password set")
 
