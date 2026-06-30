@@ -49,7 +49,7 @@ var groupCreateCmd = &cobra.Command{
 		if err := cli.AddEntry(dn, attrs); err != nil {
 			return fmt.Errorf("create group %s: %w", name, err)
 		}
-		log.Info().Str("dn", dn).Int("members", len(members)).Msg("group created")
+		log.Debug().Str("dn", dn).Int("members", len(members)).Msg("group created")
 		return out.Emit(okResult{Action: "created", DN: dn,
 			Detail: fmt.Sprintf("%d member(s)", len(members))})
 	},
@@ -159,7 +159,7 @@ func groupMemberRunE(add bool) func(*cobra.Command, []string) error {
 		if err := cli.Modify(g.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify group %s: %w", g.DN, err)
 		}
-		log.Info().Str("dn", g.DN).Int("members", len(members)).Bool("add", add).Msg("group membership changed")
+		log.Debug().Str("dn", g.DN).Int("members", len(members)).Bool("add", add).Msg("group membership changed")
 		return out.Emit(okResult{Action: fmt.Sprintf("%d member(s) %s", len(members), action), DN: g.DN})
 	}
 }
@@ -184,7 +184,7 @@ var groupDeleteCmd = &cobra.Command{
 		if err := cli.Delete(g.DN); err != nil {
 			return fmt.Errorf("delete %s: %w", g.DN, err)
 		}
-		log.Info().Str("dn", g.DN).Msg("group deleted")
+		log.Debug().Str("dn", g.DN).Msg("group deleted")
 		return out.Emit(okResult{Action: "deleted", DN: g.DN})
 	},
 }

@@ -75,7 +75,7 @@ var svcAddCmd = &cobra.Command{
 		if err = cli.AddEntry(dn, attrs); err != nil {
 			return fmt.Errorf("create %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("service account created")
+		log.Debug().Str("dn", dn).Msg("service account created")
 
 		// ACL injection needs the config bind.
 		cc, err := connectConfig()
@@ -88,7 +88,7 @@ var svcAddCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("account created, but ACL injection failed: %w", err)
 		}
-		log.Info().Str("acl", newACL).Bool("appended", appended).Msg("acl updated")
+		log.Debug().Str("acl", newACL).Bool("appended", appended).Msg("acl updated")
 
 		res := svcResult{Action: "created", DN: dn, ACL: newACL}
 		if generated {
@@ -131,7 +131,7 @@ var svcPasswdCmd = &cobra.Command{
 		if _, err := cli.SetPassword(dn, password); err != nil {
 			return fmt.Errorf("set password for %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("service account password set")
+		log.Debug().Str("dn", dn).Msg("service account password set")
 		res := svcResult{Action: "password set", DN: dn}
 		if generated {
 			res.Password = password
@@ -160,7 +160,7 @@ var svcDeleteCmd = &cobra.Command{
 		if err = cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("service account deleted")
+		log.Debug().Str("dn", dn).Msg("service account deleted")
 
 		res := svcResult{Action: "deleted", DN: dn}
 		cc, err := connectConfig()
@@ -174,7 +174,7 @@ var svcDeleteCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("entry deleted, but ACL cleanup failed: %w", err)
 		}
-		log.Info().Int("clauses", removed).Msg("acl cleaned")
+		log.Debug().Int("clauses", removed).Msg("acl cleaned")
 		res.Note = fmt.Sprintf("removed %d ACL clause(s)", removed)
 		return out.Emit(res)
 	},

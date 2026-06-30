@@ -91,7 +91,7 @@ var configLimitsSetCmd = &cobra.Command{
 		if err := cc.Modify(limitsDB, mods); err != nil {
 			return fmt.Errorf("set limits on %s: %w", limitsDB, err)
 		}
-		log.Info().Str("db", limitsDB).Msg("limits updated")
+		log.Debug().Str("db", limitsDB).Msg("limits updated")
 		return out.Emit(okResult{Action: "limits set", DN: limitsDB, Detail: detail})
 	},
 }
@@ -151,7 +151,7 @@ var configDBResizeCmd = &cobra.Command{
 		if err := cc.Modify(dn, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("resize %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Int64("bytes", size).Msg("olcDbMaxSize updated")
+		log.Debug().Str("dn", dn).Int64("bytes", size).Msg("olcDbMaxSize updated")
 		return out.Emit(okResult{Action: "olcDbMaxSize set to " + humanize.Bytes(size) + " on", DN: dn})
 	},
 }
@@ -225,7 +225,7 @@ var configSetCmd = &cobra.Command{
 		if err := cc.Modify(dn, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Str("attr", attr).Msg("config attribute modified")
+		log.Debug().Str("dn", dn).Str("attr", attr).Msg("config attribute modified")
 		return out.Emit(okResult{Action: action, DN: dn})
 	},
 }

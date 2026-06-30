@@ -88,7 +88,7 @@ var ppolicySetCmd = &cobra.Command{
 			if err := cli.Modify(dn, mods); err != nil {
 				return fmt.Errorf("update policy %s: %w", dn, err)
 			}
-			log.Info().Str("dn", dn).Int("attrs", len(edits)).Msg("policy updated")
+			log.Debug().Str("dn", dn).Int("attrs", len(edits)).Msg("policy updated")
 			return out.Emit(okResult{Action: "updated", DN: dn, Detail: fmt.Sprintf("%d setting(s)", len(edits))})
 		}
 
@@ -103,7 +103,7 @@ var ppolicySetCmd = &cobra.Command{
 		if err := cli.AddEntry(dn, attrs); err != nil {
 			return fmt.Errorf("create policy %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("policy created")
+		log.Debug().Str("dn", dn).Msg("policy created")
 		return out.Emit(okResult{Action: "created", DN: dn})
 	},
 }
@@ -143,7 +143,7 @@ var ppolicyAssignCmd = &cobra.Command{
 		if err := cli.Modify(entry.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("assign policy to %s: %w", entry.DN, err)
 		}
-		log.Info().Str("dn", entry.DN).Bool("clear", ppolicyAssignClear).Msg("policy assignment changed")
+		log.Debug().Str("dn", entry.DN).Bool("clear", ppolicyAssignClear).Msg("policy assignment changed")
 		return out.Emit(okResult{Action: action, DN: entry.DN})
 	},
 }
@@ -205,7 +205,7 @@ var ppolicyDeleteCmd = &cobra.Command{
 		if err := cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("policy deleted")
+		log.Debug().Str("dn", dn).Msg("policy deleted")
 		return out.Emit(okResult{Action: "deleted", DN: dn})
 	},
 }

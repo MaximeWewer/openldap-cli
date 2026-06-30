@@ -46,11 +46,11 @@ var userPasswdCmd = &cobra.Command{
 		} else if _, serr := cli.SetPassword(entry.DN, userPasswdValue); serr != nil {
 			return fmt.Errorf("set password for %s: %w", entry.DN, serr)
 		}
-		log.Info().Str("dn", entry.DN).Msg("password set")
+		log.Debug().Str("dn", entry.DN).Msg("password set")
 
 		res := okResult{Action: "password set", DN: entry.DN}
 		if gen != "" {
-			res.Detail = "generated: " + gen
+			res.Password = gen
 		}
 		return out.Emit(res)
 	},
@@ -101,7 +101,7 @@ var userUnlockCmd = &cobra.Command{
 				detail = fmt.Sprintf("lock cleared; %d failure record(s) left (need manage rights to clear)", failures)
 			}
 		}
-		log.Info().Str("dn", entry.DN).Msg("user unlocked")
+		log.Debug().Str("dn", entry.DN).Msg("user unlocked")
 		return out.Emit(okResult{Action: "unlocked", DN: entry.DN, Detail: detail})
 	},
 }
@@ -136,7 +136,7 @@ var userForceResetCmd = &cobra.Command{
 		if err := cli.Modify(entry.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("force-reset %s: %w", entry.DN, err)
 		}
-		log.Info().Str("dn", entry.DN).Bool("clear", userForceResetClear).Msg("pwdReset changed")
+		log.Debug().Str("dn", entry.DN).Bool("clear", userForceResetClear).Msg("pwdReset changed")
 		return out.Emit(okResult{Action: action, DN: entry.DN})
 	},
 }

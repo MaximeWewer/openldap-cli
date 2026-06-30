@@ -48,7 +48,7 @@ var importLdifCmd = &cobra.Command{
 			}
 			res.Created = append(res.Created, e.DN)
 		}
-		log.Info().Int("created", len(res.Created)).Int("failed", len(res.Failed)).Msg("ldif import done")
+		log.Debug().Int("created", len(res.Created)).Int("failed", len(res.Failed)).Msg("ldif import done")
 		return out.Emit(res)
 	},
 }

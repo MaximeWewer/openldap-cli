@@ -113,7 +113,7 @@ var backupRestoreCmd = &cobra.Command{
 			}
 			res.Created = append(res.Created, e.DN)
 		}
-		log.Info().Int("restored", len(res.Created)).Int("failed", len(res.Failed)).Msg("restore done")
+		log.Debug().Int("restored", len(res.Created)).Int("failed", len(res.Failed)).Msg("restore done")
 		return out.Emit(res)
 	},
 }
@@ -157,7 +157,7 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 	if fi, statErr := os.Stat(path); statErr == nil {
 		size = fi.Size()
 	}
-	log.Info().Str("file", path).Int("entries", len(entries)).Int64("bytes", size).Msg("backup written")
+	log.Debug().Str("file", path).Int("entries", len(entries)).Int64("bytes", size).Msg("backup written")
 	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries), Bytes: size})
 }
 

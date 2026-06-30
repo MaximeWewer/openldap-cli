@@ -100,7 +100,7 @@ var userImportCmd = &cobra.Command{
 				}
 			}
 		}
-		log.Info().Int("created", len(res.Created)).Int("failed", len(res.Failed)).Msg("import done")
+		log.Debug().Int("created", len(res.Created)).Int("failed", len(res.Failed)).Msg("import done")
 		return out.Emit(res)
 	},
 }
@@ -224,7 +224,7 @@ var userExportCmd = &cobra.Command{
 				return err
 			}
 		}
-		log.Info().Int("users", len(entries)).Msg("export done")
+		log.Debug().Int("users", len(entries)).Msg("export done")
 		return w.Error()
 	},
 }

@@ -143,7 +143,7 @@ func runUserBatch(action string, logins []string, sel *userSelectors, fn func(*l
 		}
 		res.OK = append(res.OK, t.DN)
 	}
-	log.Info().Str("action", action).Int("ok", len(res.OK)).Int("failed", len(res.Failed)).Msg("bulk done")
+	log.Debug().Str("action", action).Int("ok", len(res.OK)).Int("failed", len(res.Failed)).Msg("bulk done")
 	return out.Emit(res)
 }
 
@@ -280,7 +280,7 @@ var usersPasswdCmd = &cobra.Command{
 			}
 			res.Results = append(res.Results, passwdItem{DN: t.DN, Password: p})
 		}
-		log.Info().Int("ok", len(res.Results)).Int("failed", len(res.Failed)).Msg("bulk passwd done")
+		log.Debug().Int("ok", len(res.Results)).Int("failed", len(res.Failed)).Msg("bulk passwd done")
 		return out.Emit(res)
 	},
 }

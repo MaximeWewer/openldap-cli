@@ -79,7 +79,7 @@ var profileUseCmd = &cobra.Command{
 		if err := config.SetDefault(configPath(), name); err != nil {
 			return err
 		}
-		log.Info().Str("profile", name).Str("file", configPath()).Msg("default profile set")
+		log.Debug().Str("profile", name).Str("file", configPath()).Msg("default profile set")
 		return out.Emit(okResult{Action: "default profile set to", DN: name})
 	},
 }

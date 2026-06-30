@@ -47,7 +47,7 @@ var ouCreateCmd = &cobra.Command{
 		if err := cli.AddEntry(dn, attrs); err != nil {
 			return fmt.Errorf("create ou %s: %w", name, err)
 		}
-		log.Info().Str("dn", dn).Msg("ou created")
+		log.Debug().Str("dn", dn).Msg("ou created")
 		return out.Emit(okResult{Action: "created", DN: dn})
 	},
 }
@@ -95,7 +95,7 @@ var ouDeleteCmd = &cobra.Command{
 		if err := cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}
-		log.Info().Str("dn", dn).Msg("ou deleted")
+		log.Debug().Str("dn", dn).Msg("ou deleted")
 		return out.Emit(okResult{Action: "deleted", DN: dn})
 	},
 }

@@ -26,18 +26,25 @@ func resolveMembers(cli *ldapx.Client, logins []string) ([]string, error) {
 	return dns, nil
 }
 
-// okResult is a generic "<verb> <dn>" stdout payload.
+// okResult is a generic "<verb> <dn>" stdout payload. Password, when set,
+// carries a generated secret as its own field (so `-o json | jq -r .password`
+// extracts it cleanly) rather than being buried in Detail.
 type okResult struct {
-	Action string `json:"action" yaml:"action"`
-	DN     string `json:"dn" yaml:"dn"`
-	Detail string `json:"detail,omitempty" yaml:"detail,omitempty"`
+	Action   string `json:"action" yaml:"action"`
+	DN       string `json:"dn" yaml:"dn"`
+	Detail   string `json:"detail,omitempty" yaml:"detail,omitempty"`
+	Password string `json:"password,omitempty" yaml:"password,omitempty"`
 }
 
 func (r okResult) Text() string {
+	s := fmt.Sprintf("%s %s", r.Action, r.DN)
 	if r.Detail != "" {
-		return fmt.Sprintf("%s %s\n  %s", r.Action, r.DN, r.Detail)
+		s += "\n  " + r.Detail
 	}
-	return fmt.Sprintf("%s %s", r.Action, r.DN)
+	if r.Password != "" {
+		s += "\n  generated: " + r.Password
+	}
+	return s
 }
 
 var userCmd = &cobra.Command{
@@ -132,7 +139,7 @@ var userAddCmd = &cobra.Command{
 		if err := cli.AddEntry(dn, vals); err != nil {
 			return fmt.Errorf("create %s: %w", u.UID, err)
 		}
-		log.Info().Str("dn", dn).Msg("user created")
+		log.Debug().Str("dn", dn).Msg("user created")
 
 		res := userResult{DN: dn, UID: u.UID, CN: u.CN, DisplayName: u.DisplayName, Mail: u.Mail, Warnings: warnings}
 		if posix != nil {

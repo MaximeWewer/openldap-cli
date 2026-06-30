@@ -38,7 +38,7 @@ var userDeleteCmd = &cobra.Command{
 		if err := cli.Delete(entry.DN); err != nil {
 			return fmt.Errorf("delete %s: %w", entry.DN, err)
 		}
-		log.Info().Str("dn", entry.DN).Msg("user deleted")
+		log.Debug().Str("dn", entry.DN).Msg("user deleted")
 
 		return out.Emit(deleteResult{DN: entry.DN})
 	},
@@ -177,7 +177,7 @@ var userSetCmd = &cobra.Command{
 		if err := cli.Modify(entry.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", entry.DN, err)
 		}
-		log.Info().Str("dn", entry.DN).Str("attr", attr).Msg("attribute modified")
+		log.Debug().Str("dn", entry.DN).Str("attr", attr).Msg("attribute modified")
 		return out.Emit(okResult{Action: action, DN: entry.DN})
 	},
 }
@@ -234,7 +234,7 @@ var userRenameCmd = &cobra.Command{
 		if err := cli.Modify(newDN, mods); err != nil {
 			return fmt.Errorf("refresh attrs on %s: %w", newDN, err)
 		}
-		log.Info().Str("from", entry.DN).Str("to", newDN).Msg("user renamed")
+		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user renamed")
 		return out.Emit(okResult{Action: "renamed to", DN: newDN})
 	},
 }
@@ -265,7 +265,7 @@ var userMoveCmd = &cobra.Command{
 			return fmt.Errorf("move %s: %w", entry.DN, err)
 		}
 		newDN := rdn + "," + newParent
-		log.Info().Str("from", entry.DN).Str("to", newDN).Msg("user moved")
+		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user moved")
 		return out.Emit(okResult{Action: "moved to", DN: newDN})
 	},
 }
