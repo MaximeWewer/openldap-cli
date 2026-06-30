@@ -115,12 +115,12 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 
 ### general
 
-| Command                                                           | Notes                                                           |
-| ----------------------------------------------------------------- | --------------------------------------------------------------- |
-| `whoami`                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check |
-| `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b]` | raw search escape hatch                                         |
-| `import-ldif <file> [--stop-on-error]`                            | add entries from an LDIF file                                   |
-| `version`                                                         | print version                                                   |
+| Command                                                                           | Notes                                                                                |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `whoami`                                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check                      |
+| `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b] [--config-bind]` | raw search escape hatch; `--config-bind` searches `cn=config` (e.g. `olcModuleLoad`) |
+| `import-ldif <file> [--stop-on-error]`                                            | add entries from an LDIF file                                                        |
+| `version`                                                                         | print version                                                                        |
 
 > `user` subcommands resolve a login within `user_ou`. If you `user move` someone
 > out of it, manage them by DN with `search`/generic tools instead.

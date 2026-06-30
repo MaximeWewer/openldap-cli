@@ -36,9 +36,10 @@ var whoamiCmd = &cobra.Command{
 // ---- search -------------------------------------------------------------
 
 var (
-	searchBase  string
-	searchScope string
-	searchAttrs []string
+	searchBase       string
+	searchScope      string
+	searchAttrs      []string
+	searchConfigBind bool
 )
 
 var searchCmd = &cobra.Command{
@@ -46,9 +47,14 @@ var searchCmd = &cobra.Command{
 	Short: "Raw LDAP search (escape hatch)",
 	Args:  cobra.ExactArgs(1),
 	Example: "  openldap-cli search '(mail=*@example.org)' --attrs uid,mail\n" +
-		"  openldap-cli search '(objectClass=groupOfNames)' --base ou=groups,dc=example,dc=org",
+		"  openldap-cli search '(objectClass=groupOfNames)' --base ou=groups,dc=example,dc=org\n" +
+		"  openldap-cli search '(objectClass=olcModuleList)' --base cn=config --attrs olcModuleLoad --config-bind",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cli, err := connect()
+		connectFn := connect
+		if searchConfigBind {
+			connectFn = connectConfig
+		}
+		cli, err := connectFn()
 		if err != nil {
 			return err
 		}
@@ -96,5 +102,6 @@ func init() {
 	searchCmd.Flags().StringVar(&searchBase, "base", "", "search base DN (default: base DN)")
 	searchCmd.Flags().StringVar(&searchScope, "scope", "sub", "scope: base|one|sub")
 	searchCmd.Flags().StringSliceVar(&searchAttrs, "attrs", nil, "attributes to return (comma-separated)")
+	searchCmd.Flags().BoolVar(&searchConfigBind, "config-bind", false, "bind as the config identity (to search cn=config)")
 	rootCmd.AddCommand(whoamiCmd, searchCmd, versionCmd)
 }

@@ -104,6 +104,8 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "whoami"), "cn=admin,ou=users")
 		has(t, run(t, admin, adPW, "version"), "openldap-cli")
 		has(t, run(t, admin, adPW, "search", "(uid=user1.name)", "--attrs", "uid"), "user1.name")
+		// escape hatch into cn=config via the config bind
+		has(t, run(t, admin, adPW, "search", "(objectClass=olcModuleList)", "--base", "cn=config", "--attrs", "olcModuleLoad", "--config-bind"), "olcModuleLoad")
 	})
 
 	t.Run("user", func(t *testing.T) {
