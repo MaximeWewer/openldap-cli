@@ -2,11 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
@@ -117,6 +119,43 @@ var configDBListCmd = &cobra.Command{
 	},
 }
 
+var configDBResizeCmd = &cobra.Command{
+	Use:   "resize <database-dn> <size>",
+	Short: "Set olcDbMaxSize on an mdb database (accepts 4GiB, 512MiB, or raw bytes)",
+	Long: "Sets olcDbMaxSize (the LMDB map size). <size> takes a human value\n" +
+		"(4GiB, 512MiB, 2G) or a plain byte count. Grow only — LMDB cannot shrink\n" +
+		"below the data in use.\n\n" +
+		"WARNING: changing olcDbMaxSize remaps the LMDB env. On a live, busy server\n" +
+		"this can briefly interrupt or even restart slapd (the remap races with\n" +
+		"active transactions). The change is persisted to cn=config and applied\n" +
+		"regardless — prefer a quiet window.",
+	Args:    cobra.ExactArgs(2),
+	Example: "  openldap-cli config db resize 'olcDatabase={1}mdb,cn=config' 4GiB",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		size, err := humanize.ParseBytes(args[1])
+		if err != nil {
+			return err
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		dn := strings.TrimSpace(args[0])
+
+		// olcDbMaxSize remaps the LMDB env; on a busy server this can briefly
+		// interrupt or restart slapd. The change still persists either way.
+		log.Warn().Str("dn", dn).Msg("resizing olcDbMaxSize remaps the LMDB env and may briefly interrupt or restart slapd under load; the new size is persisted")
+
+		mod := ldapx.Mod{Op: ldapx.ModReplace, Name: "olcDbMaxSize", Values: []string{strconv.FormatInt(size, 10)}}
+		if err := cc.Modify(dn, []ldapx.Mod{mod}); err != nil {
+			return fmt.Errorf("resize %s: %w", dn, err)
+		}
+		log.Info().Str("dn", dn).Int64("bytes", size).Msg("olcDbMaxSize updated")
+		return out.Emit(okResult{Action: "olcDbMaxSize set to " + humanize.Bytes(size) + " on", DN: dn})
+	},
+}
+
 var configOverlayCmd = &cobra.Command{Use: "overlay", Short: "Overlays"}
 
 var configOverlayListCmd = &cobra.Command{
@@ -208,7 +247,7 @@ func init() {
 	configLimitsSetCmd.Flags().StringVar(&limitsFor, "for", "", "apply as olcLimits for this selector (e.g. dn.exact=...)")
 
 	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd)
-	configDBCmd.AddCommand(configDBListCmd)
+	configDBCmd.AddCommand(configDBListCmd, configDBResizeCmd)
 	configOverlayCmd.AddCommand(configOverlayListCmd)
 	configACLCmd.AddCommand(configACLListCmd)
 	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)

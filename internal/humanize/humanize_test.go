@@ -24,3 +24,33 @@ func TestBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestParseBytes(t *testing.T) {
+	ok := []struct {
+		in   string
+		want int64
+	}{
+		{"4294967296", 4294967296},
+		{"0", 0},
+		{"1024", 1024},
+		{"4G", 4294967296},
+		{"4GB", 4294967296},
+		{"4GiB", 4294967296},
+		{"  4 GiB ", 4294967296},
+		{"512MiB", 536870912},
+		{"1.5GiB", 1610612736},
+		{"1KiB", 1024},
+		{"2tib", 2199023255552},
+	}
+	for _, c := range ok {
+		got, err := ParseBytes(c.in)
+		if err != nil || got != c.want {
+			t.Errorf("ParseBytes(%q) = %d, %v; want %d", c.in, got, err, c.want)
+		}
+	}
+	for _, bad := range []string{"", "abc", "4Z", "GiB", "-5", "1.2.3"} {
+		if _, err := ParseBytes(bad); err == nil {
+			t.Errorf("ParseBytes(%q) expected error", bad)
+		}
+	}
+}

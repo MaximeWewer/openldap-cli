@@ -211,6 +211,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | Command                                                                        | Notes                                                                |
 | ------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `config db list` / `config overlay list`                                       | introspect databases / overlays                                      |
+| `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas) |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                 |
 | `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)    |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                       |
@@ -265,6 +266,12 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 - **`user passwd` generate mode** is rejected by a long `pwdMinLength`; pass
   `--password`.
 - **`user export --with-hash`** prints password hashes — sensitive output.
+- **Resizing `olcDbMaxSize` can disrupt slapd.** `config db resize` (and
+  `config set olcDbMaxSize`) remap the LMDB env. On a live, busy server this
+  races with active transactions and can briefly interrupt — sometimes restart —
+  slapd (observed intermittently, any database, under concurrent load). The new
+  size is persisted to `cn=config` and applied regardless, and the command warns
+  first. Prefer a quiet maintenance window.
 - **`backup restore` needs the rootDN:** the Relax control (re-adding a
   `userPassword` under a strict ppolicy) is only honored for the rootDN. As a
   data admin, password-bearing entries fail the policy check. `backup` is a

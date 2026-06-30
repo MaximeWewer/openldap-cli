@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 	"github.com/MaximeWewer/openldap-cli/internal/ldif"
 )
@@ -152,8 +153,12 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	log.Info().Str("file", path).Int("entries", len(entries)).Msg("backup written")
-	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries)})
+	var size int64
+	if fi, statErr := os.Stat(path); statErr == nil {
+		size = fi.Size()
+	}
+	log.Info().Str("file", path).Int("entries", len(entries)).Int64("bytes", size).Msg("backup written")
+	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries), Bytes: size})
 }
 
 // readLDIF reads entries from a plain or gzipped LDIF file (auto-detected by
@@ -212,10 +217,12 @@ type dumpResult struct {
 	File    string `json:"file" yaml:"file"`
 	Base    string `json:"base" yaml:"base"`
 	Entries int    `json:"entries" yaml:"entries"`
+	Bytes   int64  `json:"bytes" yaml:"bytes"`
 }
 
 func (r dumpResult) Text() string {
-	return fmt.Sprintf("backed up %d entries (%s) -> %s", r.Entries, r.Base, r.File)
+	return fmt.Sprintf("backed up %d entries, %s (%s) -> %s",
+		r.Entries, humanize.Bytes(r.Bytes), r.Base, r.File)
 }
 
 func init() {

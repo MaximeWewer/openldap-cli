@@ -342,9 +342,19 @@ var opsMonitorCmd = &cobra.Command{
 		}
 		if stats, err := cc.Search("cn=Statistics,cn=Monitor", "(objectClass=*)", []string{"cn", "monitorCounter"}); err == nil {
 			for _, e := range stats {
-				if c := e.Get("monitorCounter"); c != "" {
-					res.Statistics = append(res.Statistics, fmt.Sprintf("%s=%s", e.Get("cn"), c))
+				c := e.Get("monitorCounter")
+				if c == "" {
+					continue
 				}
+				cn := e.Get("cn")
+				// the Bytes counter is a byte total; the rest (Entries, PDU,
+				// Referrals) are plain counts.
+				if strings.EqualFold(cn, "Bytes") {
+					if n, perr := strconv.ParseInt(c, 10, 64); perr == nil {
+						c = fmt.Sprintf("%s (%s)", c, humanize.Bytes(n))
+					}
+				}
+				res.Statistics = append(res.Statistics, fmt.Sprintf("%s=%s", cn, c))
 			}
 		}
 		return out.Emit(res)

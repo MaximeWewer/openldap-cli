@@ -189,6 +189,12 @@ func TestCLI(t *testing.T) {
 
 	t.Run("config", func(t *testing.T) {
 		has(t, run(t, admin, adPW, "config", "db", "list"), "olcDatabase")
+		// resize: only exercise arg parsing/wiring — a live olcDbMaxSize remap can
+		// intermittently disrupt/restart slapd (racy with active txns), which would
+		// flake later subtests. The bad-unit path mutates nothing.
+		if _, se, rerr := try(root, rtPW, "config", "db", "resize", "olcDatabase={1}mdb,cn=config", "4Zorks"); rerr == nil || !strings.Contains(se, "unknown size unit") {
+			t.Errorf("config db resize bad unit: err=%v stderr=%s", rerr, se)
+		}
 		has(t, run(t, admin, adPW, "config", "overlay", "list"), "olcOverlay")
 		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"), "olcAccess")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
