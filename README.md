@@ -42,13 +42,15 @@ make build      # -> ./openldap-cli   (static, stripped; Go 1.26+)
 make install    # -> $GOBIN/openldap-cli
 ```
 
-## Testing
+## Testing & checks
 
 ```bash
 make unit         # pure unit tests (no server): acl, config, domain, ldaptime,
                   # ldapx façade, ldif, output, pwd, schema
 make integration  # ldapx façade vs the test LDAP — run `make test-up` first
 make e2e          # build the binary + drive every command group end-to-end
+make lint         # golangci-lint (~23 linters; config in .golangci.yml)
+make security     # gosec
 ```
 
 ## Configure
@@ -207,6 +209,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | ------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `config db list` / `config overlay list`                                       | introspect databases / overlays                                      |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                 |
+| `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)    |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                       |
 | `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits` |
 

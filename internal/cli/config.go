@@ -158,6 +158,39 @@ var configACLListCmd = &cobra.Command{
 	},
 }
 
+// ---- set (generic cn=config attribute) ----------------------------------
+
+var configSetCmd = &cobra.Command{
+	Use:   "set <dn> <attr> [value...]",
+	Short: "Set (or delete, if no value) an attribute on a cn=config entry",
+	Long: "Generic cn=config writer (the config-tree counterpart of `user set`).\n" +
+		"Replaces <attr> with the given value(s), or deletes it when none are given.",
+	Args: cobra.MinimumNArgs(2),
+	Example: "  # enable logging of successful operations in the accesslog overlay\n" +
+		"  openldap-cli config set 'olcOverlay={4}accesslog,olcDatabase={1}mdb,cn=config' olcAccessLogSuccess TRUE\n" +
+		"  openldap-cli config set 'olcDatabase={1}mdb,cn=config' olcDbMaxSize 2147483648",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dn, attr, values := args[0], args[1], args[2:]
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+
+		mod := ldapx.Mod{Op: ldapx.ModReplace, Name: attr, Values: values}
+		action := "set " + attr + " on"
+		if len(values) == 0 {
+			mod.Op = ldapx.ModDelete
+			action = "deleted " + attr + " on"
+		}
+		if err := cc.Modify(dn, []ldapx.Mod{mod}); err != nil {
+			return fmt.Errorf("modify %s: %w", dn, err)
+		}
+		log.Info().Str("dn", dn).Str("attr", attr).Msg("config attribute modified")
+		return out.Emit(okResult{Action: action, DN: dn})
+	},
+}
+
 // toEntryList builds an entryList from raw entries.
 func toEntryList(entries []*ldapx.Entry) entryList {
 	var l entryList
@@ -178,6 +211,6 @@ func init() {
 	configDBCmd.AddCommand(configDBListCmd)
 	configOverlayCmd.AddCommand(configOverlayListCmd)
 	configACLCmd.AddCommand(configACLListCmd)
-	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd)
+	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)
 	rootCmd.AddCommand(configCmd)
 }
