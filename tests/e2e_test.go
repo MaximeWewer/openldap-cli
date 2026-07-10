@@ -91,6 +91,9 @@ func cleanup() {
 	try(admin, adPW, "svc", "delete", "e2e.svc")
 	try(admin, adPW, "ou", "delete", "e2e.unit", "--parent", "ou=users,dc=example,dc=org")
 	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
+	for _, d := range []string{"cn=e2e.dev,ou=users,dc=example,dc=org", "cn=e2e.dev2,ou=users,dc=example,dc=org"} {
+		try(admin, adPW, "entry", "delete", d)
+	}
 }
 
 func TestCLI(t *testing.T) {
@@ -234,6 +237,22 @@ func TestCLI(t *testing.T) {
 		// under a strict ppolicy) is only honored for the rootDN.
 		has(t, run(t, root, rtPW, "backup", "restore", gz), "imported")
 		has(t, run(t, admin, adPW, "user", "info", "e2e.bak"), "e2e.bak")
+	})
+
+	t.Run("entry", func(t *testing.T) {
+		dn := "cn=e2e.dev,ou=users,dc=example,dc=org"
+		has(t, run(t, admin, adPW, "entry", "add", dn, "objectClass=device", "objectClass=top", "cn=e2e.dev", "serialNumber=SN1"), "added")
+		has(t, run(t, admin, adPW, "entry", "get", dn, "serialNumber"), "SN1")
+		run(t, admin, adPW, "entry", "set", dn, "description", "d1")
+		run(t, admin, adPW, "entry", "set", dn, "description", "d2", "--add")
+		got := run(t, admin, adPW, "entry", "get", dn, "description")
+		has(t, got, "d1")
+		has(t, got, "d2")
+		run(t, admin, adPW, "entry", "set", dn, "serialNumber") // delete attr
+		has(t, run(t, admin, adPW, "entry", "rename", dn, "cn=e2e.dev2"), "cn=e2e.dev2,ou=users")
+		run(t, admin, adPW, "entry", "delete", "cn=e2e.dev2,ou=users,dc=example,dc=org")
+		// generic escape hatch reaches cn=config with --config-bind
+		has(t, run(t, admin, adPW, "entry", "get", "cn=module{0},cn=config", "olcModuleLoad", "--config-bind"), "olcModuleLoad")
 	})
 
 	t.Run("sizelimit", func(t *testing.T) {

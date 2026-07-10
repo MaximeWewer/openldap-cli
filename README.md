@@ -123,7 +123,20 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 | `version`                                                                         | print version                                                                        |
 
 > `user` subcommands resolve a login within `user_ou`. If you `user move` someone
-> out of it, manage them by DN with `search`/generic tools instead.
+> out of it, manage them by DN with `search`/`entry` instead.
+
+### entry (generic write/read on any DN — the escape hatch)
+
+The write-side counterpart of `search`, for entries the typed commands don't
+cover. Uses the data bind; `--config-bind` targets `cn=config`.
+
+| Command                                                       | Notes                                                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `entry get <dn> [attr...]`                                    | read one entry (base scope; all attrs if none named) — like `ldapsearch` |
+| `entry add <dn> <attr=value>...`                              | create an entry from `attr=value` pairs (repeat a name for multi-values) — like `ldapadd` |
+| `entry set <dn> <attr> [value...] [--add]`                    | replace an attribute; no value = delete it; `--add` appends — like `ldapmodify` |
+| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn]` | modrdn / move — like `ldapmodrdn`                                   |
+| `entry delete <dn>`                                           | delete any leaf entry — like `ldapdelete`                                 |
 
 ### user
 
