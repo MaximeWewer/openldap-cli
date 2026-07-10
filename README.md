@@ -121,8 +121,11 @@ openldap-cli --profile dev user …  # one-off override for a single command
 
 Some operations write to `cn=config` (which only the config rootDN may touch).
 Set `config_bind_dn`/`config_bind_pw` (e.g. `cn=adminconfig,cn=config`) for:
-`svc add/delete` (ACL injection) and all `ops` reads. Commands that only touch
-the data tree use the regular `bind_dn`.
+`svc add/delete` (ACL injection), `config`/`entry --config-bind`, and all `ops`
+reads. Commands that only touch the data tree use the regular `bind_dn`.
+
+On the LDAP host you can skip the config bind entirely with **SASL EXTERNAL over
+`ldapi://`** — see [below](#sasl-external-over-ldapi-passwordless-local-admin).
 
 ## Global flags
 
@@ -140,12 +143,12 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 
 ### general
 
-| Command                                                                           | Notes                                                                                |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `whoami`                                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check                      |
+| Command                                                                                           | Notes                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `whoami`                                                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check                                                                                      |
 | `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b] [--operational] [--config-bind]` | raw search escape hatch; `--operational` also returns `+` attrs (`entryUUID`, `pwdChangedTime`, `contextCSN`…); `--config-bind` searches `cn=config` |
-| `import-ldif <file> [--stop-on-error]`                                            | add entries from an LDIF file                                                        |
-| `version`                                                                         | print version                                                                        |
+| `import-ldif <file> [--stop-on-error]`                                                            | add entries from an LDIF file                                                                                                                        |
+| `version`                                                                                         | print version                                                                                                                                        |
 
 > `user` subcommands resolve a login within `user_ou`. If you `user move` someone
 > out of it, manage them by DN with `search`/`entry` instead.
@@ -155,27 +158,27 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 The write-side counterpart of `search`, for entries the typed commands don't
 cover. Uses the data bind; `--config-bind` targets `cn=config`.
 
-| Command                                                       | Notes                                                                    |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `entry get <dn> [attr...]`                                    | read one entry (base scope; all attrs if none named) — like `ldapsearch` |
-| `entry add <dn> <attr=value>...`                              | create an entry from `attr=value` pairs (repeat a name for multi-values) — like `ldapadd` |
-| `entry set <dn> <attr> [value...] [--add]`                    | replace an attribute; no value = delete it; `--add` appends — like `ldapmodify` |
-| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn]` | modrdn / move — like `ldapmodrdn`                                   |
-| `entry delete <dn>`                                           | delete any leaf entry — like `ldapdelete`                                 |
+| Command                                                             | Notes                                                                                     |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `entry get <dn> [attr...]`                                          | read one entry (base scope; all attrs if none named) — like `ldapsearch`                  |
+| `entry add <dn> <attr=value>...`                                    | create an entry from `attr=value` pairs (repeat a name for multi-values) — like `ldapadd` |
+| `entry set <dn> <attr> [value...] [--add]`                          | replace an attribute; no value = delete it; `--add` appends — like `ldapmodify`           |
+| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn]` | modrdn / move — like `ldapmodrdn`                                                         |
+| `entry delete <dn>`                                                 | delete any leaf entry — like `ldapdelete`                                                 |
 
 ### user
 
-| Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                          |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                                                 |
+| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes — unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber (needs `nis` schema) |
-| `user delete <login>`                                                                                                | refint auto-purges group memberships                                                                                                                                                                                                                                                                                           |
-| `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy                                                                                                                                                                                                                                                                 |
-| `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                  |
-| `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                        |
-| `user rename <old> <new.login>`                                                                                      | cn modrdn + refresh derived attrs (refint rewrites group member DNs)                                                                                                                                                                                                                                                           |
-| `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                             |
-| `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                         |
-| `user move <login> <new-parent-dn>`                                                                                  | modrdn to another OU (keeps RDN)                                                                                                                                                                                                                                                                                               |
+| `user delete <login>`                                                                                                | refint auto-purges group memberships                                                                                                                                                                                                                                                                                                                  |
+| `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy                                                                                                                                                                                                                                                                                        |
+| `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                                       |
+| `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                               |
+| `user rename <old> <new.login>`                                                                                      | cn modrdn + refresh derived attrs (refint rewrites group member DNs)                                                                                                                                                                                                                                                                                  |
+| `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                    |
+| `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                |
+| `user move <login> <new-parent-dn>`                                                                                  | modrdn to another OU (keeps RDN)                                                                                                                                                                                                                                                                                                                      |
 
 (Listing, import and export are inherently set-oriented — see `users` below.)
 
@@ -235,26 +238,26 @@ an orphan `to <subtree> by * none` (same as the bash script).
 
 ### ops (diagnostics — read via the config bind)
 
-| Command                                                                | Notes                                                                          |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Command                                                                | Notes                                                                                   |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `ops db-stats`                                                         | per-DB entries + used/max size (human-readable) and page usage % (catch `MDB_MAP_FULL`) |
-| `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                               |
-| `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                         |
-| `ops who-can-write <dn>`                                               | `olcAccess` rules referencing a DN (read manually)                             |
-| `ops replication`                                                      | local `contextCSN`; multi-peer drift is HA-only                                |
-| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics) |
+| `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                                        |
+| `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                                  |
+| `ops who-can-write <dn>`                                               | `olcAccess` rules referencing a DN (read manually)                                      |
+| `ops replication`                                                      | local `contextCSN`; multi-peer drift is HA-only                                         |
+| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics)          |
 
 ### config (cn=config — needs the config bind)
 
-| Command                                                                        | Notes                                                                |
-| ------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `config db list` / `config overlay list`                                       | introspect databases / overlays                                      |
-| `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas) |
-| `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                 |
+| Command                                                                        | Notes                                                                                                                    |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `config db list` / `config overlay list`                                       | introspect databases / overlays                                                                                          |
+| `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas)     |
+| `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
 | `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
-| `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)    |
-| `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                       |
-| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits` |
+| `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)                                                        |
+| `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                           |
+| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits`                                                     |
 
 ### backup (logical LDIF over the wire — no docker/shell/volume needed)
 
@@ -446,22 +449,38 @@ openldap-cli ppolicy assign toto.titi --clear                # back to default
 openldap-cli config db list
 openldap-cli config overlay list
 openldap-cli config acl list 'olcDatabase={1}mdb,cn=config'
-openldap-cli --profile prod-root config limits set --size 5000     # raise the search cap
+openldap-cli --profile prod-root config acl move 'olcDatabase={1}mdb,cn=config' 8 5   # raise a shadowed rule
+openldap-cli --profile prod-root config db resize 'olcDatabase={2}mdb,cn=config' 4GiB # olcDbMaxSize
+openldap-cli --profile prod-root config limits set --size 5000                        # raise the search cap
 
 openldap-cli schema list-classes
 openldap-cli schema show inetOrgPerson
+```
+
+### Any DN (the `entry` escape hatch)
+
+```bash
+openldap-cli entry add 'cn=printer1,ou=devices,dc=example,dc=org' \
+  objectClass=device objectClass=top cn=printer1 serialNumber=XZ-42
+openldap-cli entry get 'cn=printer1,ou=devices,dc=example,dc=org'
+openldap-cli entry set 'cn=team,ou=groups,dc=example,dc=org' member 'cn=x,ou=users,dc=example,dc=org' --add
+openldap-cli entry rename 'cn=old,ou=groups,dc=example,dc=org' cn=new
+openldap-cli entry delete 'cn=printer1,ou=devices,dc=example,dc=org'
+openldap-cli entry get 'cn=module{0},cn=config' olcModuleLoad --config-bind
 ```
 
 ### Diagnostics & search
 
 ```bash
 openldap-cli whoami                                         # who am I bound as?
-openldap-cli ops db-stats                                   # MDB page usage (catch MAP_FULL)
+openldap-cli ops db-stats                                   # per-DB used/max size (human) — catch MAP_FULL
 openldap-cli ops monitor                                    # connections / ops / threads
 openldap-cli ops audit-binds --since 24h --user toto.titi
 openldap-cli ops who-can-write 'cn=admin,ou=users,dc=example,dc=org'
 
 openldap-cli search '(mail=*@example.org)' --attrs uid,mail
+openldap-cli search '(uid=toto.titi)' --operational         # + entryUUID, pwdChangedTime, …
+openldap-cli search '(objectClass=olcModuleList)' --base cn=config --config-bind
 openldap-cli -o json search '(&(objectClass=inetOrgPerson)(title=SRE))' | jq -r '.entries[].dn'
 ```
 
