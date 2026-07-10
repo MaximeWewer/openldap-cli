@@ -118,7 +118,7 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 | Command                                                                           | Notes                                                                                |
 | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | `whoami`                                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check                      |
-| `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b] [--config-bind]` | raw search escape hatch; `--config-bind` searches `cn=config` (e.g. `olcModuleLoad`) |
+| `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b] [--operational] [--config-bind]` | raw search escape hatch; `--operational` also returns `+` attrs (`entryUUID`, `pwdChangedTime`, `contextCSN`…); `--config-bind` searches `cn=config` |
 | `import-ldif <file> [--stop-on-error]`                                            | add entries from an LDIF file                                                        |
 | `version`                                                                         | print version                                                                        |
 

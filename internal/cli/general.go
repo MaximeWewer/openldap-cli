@@ -36,10 +36,11 @@ var whoamiCmd = &cobra.Command{
 // ---- search -------------------------------------------------------------
 
 var (
-	searchBase       string
-	searchScope      string
-	searchAttrs      []string
-	searchConfigBind bool
+	searchBase        string
+	searchScope       string
+	searchAttrs       []string
+	searchConfigBind  bool
+	searchOperational bool
 )
 
 var searchCmd = &cobra.Command{
@@ -75,7 +76,18 @@ var searchCmd = &cobra.Command{
 			return fmt.Errorf("--scope must be base|one|sub")
 		}
 
-		entries, err := cli.SearchScope(base, scope, args[0], searchAttrs, 250)
+		attrs := searchAttrs
+		if searchOperational {
+			// "+" returns operational attributes; add "*" too when no explicit
+			// attrs so user attributes still come back alongside them.
+			if len(attrs) == 0 {
+				attrs = []string{"*", "+"}
+			} else {
+				attrs = append(attrs, "+")
+			}
+		}
+
+		entries, err := cli.SearchScope(base, scope, args[0], attrs, 250)
 		if err != nil {
 			return fmt.Errorf("search: %w", err)
 		}
@@ -103,5 +115,6 @@ func init() {
 	searchCmd.Flags().StringVar(&searchScope, "scope", "sub", "scope: base|one|sub")
 	searchCmd.Flags().StringSliceVar(&searchAttrs, "attrs", nil, "attributes to return (comma-separated)")
 	searchCmd.Flags().BoolVar(&searchConfigBind, "config-bind", false, "bind as the config identity (to search cn=config)")
+	searchCmd.Flags().BoolVar(&searchOperational, "operational", false, "also return operational attributes (+): entryUUID, pwdChangedTime, contextCSN, …")
 	rootCmd.AddCommand(whoamiCmd, searchCmd, versionCmd)
 }
