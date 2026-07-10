@@ -37,7 +37,7 @@ func (c *Client) SearchAll(base, filter string, attrs []string) (entries []*Entr
 	if !ldap.IsErrorWithCode(err, ldap.LDAPResultSizeLimitExceeded) {
 		return nil, false, err
 	}
-	if c.cfg.ConfigBindDN == "" {
+	if c.cfg.ConfigBindDN == "" && !c.cfg.SASLExternal {
 		return nil, false, &SizeLimitError{Base: base}
 	}
 	entries, err = c.searchEscalated(base, filter, attrs)

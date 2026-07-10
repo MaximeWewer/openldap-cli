@@ -63,6 +63,18 @@ func TestLoadEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadSASLExternalEnv(t *testing.T) {
+	p := writeSample(t)
+	t.Setenv("LDAP_SASL_EXTERNAL", "true")
+	prof, err := Load(p, "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prof.SASLExternal {
+		t.Errorf("LDAP_SASL_EXTERNAL=true did not set SASLExternal: %+v", prof)
+	}
+}
+
 func TestLoadMissingURL(t *testing.T) {
 	p := writeSample(t)
 	if _, err := Load(p, "ghost"); err == nil {

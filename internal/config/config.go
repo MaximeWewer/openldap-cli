@@ -31,6 +31,12 @@ type Profile struct {
 	StartTLS   bool   `yaml:"start_tls"`   // upgrade ldap:// to TLS
 	Insecure   bool   `yaml:"insecure"`    // skip TLS cert verification (dev only)
 
+	// SASLExternal binds via SASL/EXTERNAL instead of a simple bind — the
+	// identity comes from the transport (Unix-socket peer creds over ldapi://,
+	// or a TLS client cert). bind_dn/bind_pw are then ignored. Typical use: run
+	// as root against ldapi:/// to manage cn=config with no stored password.
+	SASLExternal bool `yaml:"sasl_external"`
+
 	// Second bind for cn=config writes (ACL injection, overlays). Usually the
 	// config rootDN, e.g. cn=adminconfig,cn=config.
 	ConfigBindDN string `yaml:"config_bind_dn"`
@@ -172,6 +178,7 @@ func applyEnv(p *Profile) {
 	envStr(&p.ConfigBindPW, "LDAP_CONFIG_BIND_PW")
 	envBool(&p.StartTLS, "LDAP_START_TLS")
 	envBool(&p.Insecure, "LDAP_INSECURE")
+	envBool(&p.SASLExternal, "LDAP_SASL_EXTERNAL")
 }
 
 func envStr(dst *string, key string) {

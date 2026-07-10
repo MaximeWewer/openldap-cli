@@ -81,7 +81,32 @@ profiles:
 
 Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 `LDAP_USER_OU`, `LDAP_GROUP_OU`, `LDAP_POLICY_OU`, `LDAP_MAIL_DOMAIN`,
-`LDAP_CONFIG_BIND_DN`, `LDAP_CONFIG_BIND_PW`, `LDAP_START_TLS`, `LDAP_INSECURE`.
+`LDAP_CONFIG_BIND_DN`, `LDAP_CONFIG_BIND_PW`, `LDAP_START_TLS`, `LDAP_INSECURE`,
+`LDAP_SASL_EXTERNAL`.
+
+### SASL EXTERNAL over `ldapi://` (passwordless local admin)
+
+Set `sasl_external: true` (or `LDAP_SASL_EXTERNAL=true`) with an `ldapi://`
+URL to bind via **SASL/EXTERNAL** — the identity comes from the Unix-socket
+peer credentials, so `bind_dn`/`bind_pw` (and even `config_bind_dn`) are not
+needed. Run as **root on the LDAP host** to manage `cn=config` with no stored
+password, the CLI equivalent of `ldapsearch -Y EXTERNAL -H ldapi:///`:
+
+```yaml
+profiles:
+  local-root:
+    url: ldapi:///              # default socket /var/run/slapd/ldapi
+    base_dn: dc=example,dc=org
+    sasl_external: true
+```
+
+```bash
+sudo openldap-cli --profile local-root config acl list 'olcDatabase={1}mdb,cn=config'
+```
+
+This works only if the server maps the peer identity to a privileged DN
+(`olcAuthzRegexp` + a `cn=config` ACL granting `gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth`);
+a custom socket path is `url: ldapi://%2Frun%2Fslapd%2Fldapi`.
 
 ### Switching profiles
 

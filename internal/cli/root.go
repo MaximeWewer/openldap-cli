@@ -122,6 +122,12 @@ func connectConfig() (*ldapx.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// With SASL EXTERNAL (e.g. root over ldapi://) the bound identity already
+	// manages cn=config — no separate config bind DN is needed.
+	if cfg.SASLExternal {
+		log.Debug().Str("url", cfg.URL).Msg("connecting (config, sasl external)")
+		return ldapx.Connect(cfg)
+	}
 	if cfg.ConfigBindDN == "" {
 		return nil, fmt.Errorf("config_bind_dn not set (needed for cn=config writes; e.g. cn=adminconfig,cn=config)")
 	}

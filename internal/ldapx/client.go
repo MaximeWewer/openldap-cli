@@ -35,7 +35,14 @@ func Connect(p *config.Profile) (*Client, error) {
 			return nil, fmt.Errorf("starttls: %w", err)
 		}
 	}
-	if p.BindDN != "" {
+	switch {
+	case p.SASLExternal:
+		// identity comes from the transport (ldapi peer creds / TLS client cert)
+		if err := conn.ExternalBind(); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("sasl external bind: %w", err)
+		}
+	case p.BindDN != "":
 		if err := conn.Bind(p.BindDN, p.BindPW); err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("bind as %s: %w", p.BindDN, err)

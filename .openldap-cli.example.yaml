@@ -48,3 +48,11 @@ profiles:
     user_ou: ou=people
     group_ou: ou=groups
     mail_domain: example.org
+
+  # Passwordless local admin: SASL EXTERNAL over the ldapi:// Unix socket. Run as
+  # root on the LDAP host; the identity comes from peer creds, so no bind_dn /
+  # bind_pw / config_bind_dn. (Server must map the peer identity to a priv DN.)
+  local-root:
+    url: ldapi:///              # default socket /var/run/slapd/ldapi
+    base_dn: dc=example,dc=org
+    sasl_external: true
