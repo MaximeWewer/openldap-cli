@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
@@ -197,6 +198,51 @@ var configACLListCmd = &cobra.Command{
 	},
 }
 
+var configACLMoveCmd = &cobra.Command{
+	Use:   "move <database-dn> <from> <to>",
+	Short: "Reorder an olcAccess rule (move rule {from} to position {to})",
+	Long: "olcAccess is evaluated in index order and STOPS at the first rule whose\n" +
+		"`to` target matches, so a specific rule placed below a broad one never\n" +
+		"fires. This moves rule {from} to position {to} and renumbers the rest in\n" +
+		"one atomic replace.\n\n" +
+		"CAUTION: raising a narrow rule that ends in `by * none` above a broader\n" +
+		"rule will block every identity the broader rule used to serve on that\n" +
+		"entry (rootDN excepted). Give the narrow rule a `by * break` (or the\n" +
+		"needed `by ... ` clauses) first — edit it with `config set` if so.",
+	Args: cobra.ExactArgs(3),
+	Example: "  # raise the vcf-admin rule {8} above the broad ou=groups rule {5}\n" +
+		"  openldap-cli config acl move 'olcDatabase={1}mdb,cn=config' 8 5",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		from, err := strconv.Atoi(strings.Trim(args[1], "{}"))
+		if err != nil {
+			return fmt.Errorf("from index %q: not a number", args[1])
+		}
+		to, err := strconv.Atoi(strings.Trim(args[2], "{}"))
+		if err != nil {
+			return fmt.Errorf("to index %q: not a number", args[2])
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		dn := strings.TrimSpace(args[0])
+		e, err := cc.ReadEntry(dn, []string{"olcAccess"})
+		if err != nil {
+			return err
+		}
+		reordered, err := acl.Reorder(e.GetAll("olcAccess"), from, to)
+		if err != nil {
+			return err
+		}
+		if err := cc.Modify(dn, []ldapx.Mod{{Op: ldapx.ModReplace, Name: "olcAccess", Values: reordered}}); err != nil {
+			return fmt.Errorf("reorder olcAccess on %s: %w", dn, err)
+		}
+		log.Debug().Str("dn", dn).Int("from", from).Int("to", to).Msg("olcAccess reordered")
+		return out.Emit(okResult{Action: fmt.Sprintf("moved olcAccess {%d} to {%d} on", from, to), DN: dn})
+	},
+}
+
 // ---- set (generic cn=config attribute) ----------------------------------
 
 var configSetCmd = &cobra.Command{
@@ -249,7 +295,7 @@ func init() {
 	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd)
 	configDBCmd.AddCommand(configDBListCmd, configDBResizeCmd)
 	configOverlayCmd.AddCommand(configOverlayListCmd)
-	configACLCmd.AddCommand(configACLListCmd)
+	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd)
 	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)
 	rootCmd.AddCommand(configCmd)
 }

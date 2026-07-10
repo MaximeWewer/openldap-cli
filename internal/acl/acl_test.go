@@ -82,3 +82,37 @@ func TestRemoveGranteeNoMatch(t *testing.T) {
 		t.Errorf("expected no edits, got %d / %+v", removed, edits)
 	}
 }
+
+func TestReorder(t *testing.T) {
+	// intentionally out of order to prove it sorts by index first
+	vals := []string{"{5}to dn.subtree=g by X write by * none", "{8}to dn.subtree=g/vcf by Y read by * none", "{0}to * by * break"}
+
+	// move {8} above {5} -> position 1
+	got, err := Reorder(vals, 2, 1)
+	if err != nil {
+		t.Fatalf("Reorder: %v", err)
+	}
+	want := []string{"to * by * break", "to dn.subtree=g/vcf by Y read by * none", "to dn.subtree=g by X write by * none"}
+	if len(got) != len(want) {
+		t.Fatalf("len=%d want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("pos %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// no-op move returns the sorted, unindexed bodies
+	same, _ := Reorder(vals, 0, 0)
+	if same[0] != "to * by * break" {
+		t.Errorf("no-op first = %q", same[0])
+	}
+
+	// out of range
+	if _, err := Reorder(vals, 0, 9); err == nil {
+		t.Error("expected out-of-range error")
+	}
+	if _, err := Reorder(nil, 0, 0); err == nil {
+		t.Error("expected empty error")
+	}
+}

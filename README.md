@@ -213,6 +213,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config db list` / `config overlay list`                                       | introspect databases / overlays                                      |
 | `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas) |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                 |
+| `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
 | `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)    |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                       |
 | `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits` |
@@ -263,6 +264,14 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 - **`ppolicy set` / OUs under the base / `svc` ACLs** require the rootDN — your
   `ou=users` admin has write only inside specific subtrees.
 - **`--posix`** needs the `nis` schema loaded server-side.
+- **`olcAccess` order matters — and the trap when reordering.** Rules are
+  evaluated by index and evaluation **stops at the first matching `to` target**,
+  so a specific rule below a broad one never fires (a classic cause of a
+  `noSuchObject`/code 32 where the base entry's `disclose` was denied). Use
+  `config acl move` to raise it. **But** raising a narrow rule that ends in
+  `by * none` blocks every identity the broader rule served on that entry
+  (rootDN excepted) — give it a `by * break` (or the needed `by …` clauses)
+  first, editing the rule with `config set`.
 - **Generated passwords adapt to the policy.** `user passwd` / `user add` /
   `users passwd` size the generated password to the effective `pwdMinLength`
   (resolved from the user's `pwdPolicySubentry`, the overlay `olcPPolicyDefault`

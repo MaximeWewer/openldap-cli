@@ -8,6 +8,7 @@ package acl
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -28,6 +29,43 @@ func SplitIndexed(v string) (int, string) {
 		}
 	}
 	return -1, v
+}
+
+// Reorder takes the indexed olcAccess values, sorts them by current index, moves
+// the rule at position `from` to position `to`, and returns the rule bodies in
+// the new order WITHOUT index prefixes — suitable for a single olcAccess replace
+// (the server renumbers them {0},{1},… in this order). Positions are zero-based.
+func Reorder(values []string, from, to int) ([]string, error) {
+	type rule struct {
+		idx  int
+		body string
+	}
+	rules := make([]rule, len(values))
+	for i, v := range values {
+		idx, body := SplitIndexed(v)
+		rules[i] = rule{idx, strings.TrimSpace(body)}
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
+
+	n := len(rules)
+	if n == 0 {
+		return nil, fmt.Errorf("no olcAccess rules to reorder")
+	}
+	if from < 0 || from >= n || to < 0 || to >= n {
+		return nil, fmt.Errorf("index out of range: from=%d to=%d (have %d rules, {0}..{%d})", from, to, n, n-1)
+	}
+
+	bodies := make([]string, n)
+	for i, r := range rules {
+		bodies[i] = r.body
+	}
+	if from == to {
+		return bodies, nil
+	}
+	moved := bodies[from]
+	bodies = append(bodies[:from], bodies[from+1:]...) // remove
+	bodies = append(bodies[:to], append([]string{moved}, bodies[to:]...)...)
+	return bodies, nil
 }
 
 // Inject adds `by dn.exact="svc" <access>` to the rule targeting subtree (before

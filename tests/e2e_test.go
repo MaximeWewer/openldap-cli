@@ -197,6 +197,10 @@ func TestCLI(t *testing.T) {
 		}
 		has(t, run(t, admin, adPW, "config", "overlay", "list"), "olcOverlay")
 		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"), "olcAccess")
+		// reorder an olcAccess rule and put it back (live, no restart)
+		db := "olcDatabase={1}mdb,cn=config"
+		has(t, run(t, root, rtPW, "config", "acl", "move", db, "0", "1"), "moved olcAccess {0} to {1}")
+		run(t, root, rtPW, "config", "acl", "move", db, "1", "0")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})
