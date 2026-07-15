@@ -205,6 +205,11 @@ func TestCLI(t *testing.T) {
 		db := "olcDatabase={1}mdb,cn=config"
 		has(t, run(t, root, rtPW, "config", "acl", "move", db, "0", "1"), "moved olcAccess {0} to {1}")
 		run(t, root, rtPW, "config", "acl", "move", db, "1", "0")
+		// grant a group read on a subtree (by group.exact clause), then revoke
+		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org", "--group", "e2e.devs", "--access", "read"),
+			`granted read to group.exact="cn=e2e.devs`)
+		has(t, run(t, admin, adPW, "config", "acl", "list", db), `by group.exact="cn=e2e.devs`)
+		has(t, run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs"), "revoked 1 clause")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})

@@ -27,7 +27,7 @@ func TestInjectInsertsBeforeNone(t *testing.T) {
 		`{0}to attrs=userPassword by self write by * none`,
 		`{4}to dn.subtree="ou=users,dc=example,dc=org" by self write by * none`,
 	}
-	edit, appended := Inject(values, "ou=users,dc=example,dc=org", svc, "read")
+	edit, appended := Inject(values, "ou=users,dc=example,dc=org", DNWho(svc), "read")
 	if appended {
 		t.Fatal("expected insert, got append")
 	}
@@ -43,7 +43,7 @@ func TestInjectInsertsBeforeNone(t *testing.T) {
 func TestInjectAppendsWhenMissing(t *testing.T) {
 	svc := `cn=svc,ou=service-accounts,dc=example,dc=org`
 	values := []string{`{0}to attrs=userPassword by * none`}
-	edit, appended := Inject(values, "ou=contractors,dc=example,dc=org", svc, "write")
+	edit, appended := Inject(values, "ou=contractors,dc=example,dc=org", DNWho(svc), "write")
 	if !appended {
 		t.Fatal("expected append")
 	}
@@ -62,7 +62,7 @@ func TestRemoveGrantee(t *testing.T) {
 		`{4}to dn.subtree="ou=users,dc=example,dc=org" by self write by dn.exact="` + svc + `" read by * none`,
 		`{5}to dn.base="dc=example,dc=org" by * read`,
 	}
-	edits, removed := RemoveGrantee(values, svc)
+	edits, removed := RemoveGrantee(values, DNWho(svc))
 	if removed != 1 {
 		t.Fatalf("removed = %d, want 1", removed)
 	}
@@ -77,7 +77,7 @@ func TestRemoveGrantee(t *testing.T) {
 
 func TestRemoveGranteeNoMatch(t *testing.T) {
 	values := []string{`{0}to * by * read`}
-	edits, removed := RemoveGrantee(values, "cn=absent,dc=x")
+	edits, removed := RemoveGrantee(values, DNWho("cn=absent,dc=x"))
 	if removed != 0 || edits != nil {
 		t.Errorf("expected no edits, got %d / %+v", removed, edits)
 	}
@@ -114,5 +114,18 @@ func TestReorder(t *testing.T) {
 	}
 	if _, err := Reorder(nil, 0, 0); err == nil {
 		t.Error("expected empty error")
+	}
+}
+
+func TestInjectGroupWho(t *testing.T) {
+	g := `cn=readers,ou=groups,dc=example,dc=org`
+	values := []string{`{4}to dn.subtree="ou=x,dc=example,dc=org" by dn.exact="cn=sa1,dc=example,dc=org" read by * none`}
+	edit, appended := Inject(values, "ou=x,dc=example,dc=org", GroupWho(g), "read")
+	if appended {
+		t.Fatal("expected insert into existing rule")
+	}
+	want := `{4}to dn.subtree="ou=x,dc=example,dc=org" by dn.exact="cn=sa1,dc=example,dc=org" read by group.exact="` + g + `" read by * none`
+	if edit.Add != want {
+		t.Errorf("Add = %q, want %q", edit.Add, want)
 	}
 }

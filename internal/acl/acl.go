@@ -68,11 +68,22 @@ func Reorder(values []string, from, to int) ([]string, error) {
 	return bodies, nil
 }
 
-// Inject adds `by dn.exact="svc" <access>` to the rule targeting subtree (before
-// `by * none`), or returns a new appended rule when none targets it.
-func Inject(values []string, subtree, svc, access string) (edit Edit, appended bool) {
+// DNWho builds the olcAccess "who" token for a single entry (dn.exact).
+func DNWho(dn string) string { return fmt.Sprintf(`dn.exact="%s"`, dn) }
+
+// GroupWho builds the olcAccess "who" token for a group's members (group.exact).
+// Every member of the group then shares the granted access — the scalable way
+// to give several service accounts the same rights on a tree.
+func GroupWho(groupDN string) string { return fmt.Sprintf(`group.exact="%s"`, groupDN) }
+
+// Inject adds `by <who> <access>` to the rule targeting subtree (before
+// `by * none`), or returns a new appended rule when none targets it. `who` is a
+// full olcAccess who-token, e.g. DNWho(dn) or GroupWho(dn). Adding it as a new
+// `by` clause in the SAME rule (rather than a second rule with the same `to`,
+// which would be dead) is what lets multiple grantees coexist on one tree.
+func Inject(values []string, subtree, who, access string) (edit Edit, appended bool) {
 	targetPrefix := fmt.Sprintf(`to dn.subtree="%s"`, subtree)
-	clause := fmt.Sprintf(`by dn.exact="%s" %s`, svc, access)
+	clause := fmt.Sprintf(`by %s %s`, who, access)
 
 	for _, v := range values {
 		idx, body := SplitIndexed(v)
@@ -90,10 +101,11 @@ func Inject(values []string, subtree, svc, access string) (edit Edit, appended b
 	return Edit{Add: fmt.Sprintf("%s %s by * none", targetPrefix, clause)}, true
 }
 
-// RemoveGrantee strips every `by dn.exact="svc" <access>` clause referencing svc,
-// returning the edits to apply and how many clauses were removed.
-func RemoveGrantee(values []string, svc string) (edits []Edit, removed int) {
-	needle := fmt.Sprintf(`dn.exact="%s"`, svc)
+// RemoveGrantee strips every `by <who> <access>` clause referencing who,
+// returning the edits to apply and how many clauses were removed. `who` is a
+// full who-token (DNWho/GroupWho).
+func RemoveGrantee(values []string, who string) (edits []Edit, removed int) {
+	needle := who
 	for _, v := range values {
 		if !strings.Contains(v, needle) {
 			continue

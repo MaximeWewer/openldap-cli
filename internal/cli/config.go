@@ -243,6 +243,116 @@ var configACLMoveCmd = &cobra.Command{
 	},
 }
 
+// ---- grant / revoke (olcAccess by-clause on a subtree) ------------------
+
+var (
+	aclGrantGroup  string
+	aclGrantDN     string
+	aclGrantAccess string
+	aclRevokeGroup string
+	aclRevokeDN    string
+)
+
+// validAccess reports whether a is a recognized olcAccess level.
+func validAccess(a string) bool {
+	switch a {
+	case "none", "disclose", "auth", "compare", "search", "read", "write", "manage":
+		return true
+	}
+	return false
+}
+
+// aclWho resolves a --group/--dn pair to an olcAccess who-token. A --group value
+// containing "=" is used as a DN as-is; otherwise it is resolved by name under
+// the group OU (via the data bind).
+func aclWho(group, dn string) (string, error) {
+	if (group == "") == (dn == "") {
+		return "", fmt.Errorf("pass exactly one of --group or --dn")
+	}
+	if dn != "" {
+		return acl.DNWho(strings.TrimSpace(dn)), nil
+	}
+	g := strings.TrimSpace(group)
+	if !strings.Contains(g, "=") { // a bare name -> resolve to its DN
+		cli, err := connect()
+		if err != nil {
+			return "", err
+		}
+		defer cli.Close()
+		e, ferr := cli.FindGroup(g, []string{"cn"})
+		if ferr != nil {
+			return "", ferr
+		}
+		g = e.DN
+	}
+	return acl.GroupWho(g), nil
+}
+
+var configACLGrantCmd = &cobra.Command{
+	Use:   "grant <database-dn> <subtree> --access <a> (--group <g> | --dn <d>)",
+	Short: "Add a `by <who> <access>` clause to the rule protecting <subtree>",
+	Long: "Grants access on <subtree> to a group (--group, all its members share the\n" +
+		"right — the scalable way to give several service accounts the same access)\n" +
+		"or a single DN (--dn). The clause is inserted into the EXISTING rule for\n" +
+		"<subtree> (before `by * none`), so multiple grantees coexist; a second rule\n" +
+		"with the same target would be dead. If a new rule is appended, order it with\n" +
+		"`config acl move` so it isn't shadowed by a broader rule above.",
+	Args: cobra.ExactArgs(2),
+	Example: "  # give every member of cn=readers read on a tree\n" +
+		"  openldap-cli config acl grant 'olcDatabase={1}mdb,cn=config' \\\n" +
+		"      'cn=vcf-admin,ou=groups,dc=example,dc=org' --group readers --access read",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db, subtree := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
+		if !validAccess(aclGrantAccess) {
+			return fmt.Errorf("--access must be one of none|disclose|auth|compare|search|read|write|manage")
+		}
+		who, err := aclWho(aclGrantGroup, aclGrantDN)
+		if err != nil {
+			return err
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		rule, appended, err := cc.InjectAccess(db, subtree, who, aclGrantAccess)
+		if err != nil {
+			return fmt.Errorf("grant on %s: %w", db, err)
+		}
+		log.Debug().Str("db", db).Str("who", who).Bool("appended", appended).Msg("olcAccess grant")
+		res := okResult{Action: "granted " + aclGrantAccess + " to " + who + " on", DN: db, Detail: rule}
+		if appended {
+			res.Detail = rule + "\n  (appended at end — order it with `config acl move` so a broad rule above doesn't shadow it)"
+		}
+		return out.Emit(res)
+	},
+}
+
+var configACLRevokeCmd = &cobra.Command{
+	Use:     "revoke <database-dn> (--group <g> | --dn <d>)",
+	Short:   "Remove every `by <who> …` clause referencing a group or DN",
+	Args:    cobra.ExactArgs(1),
+	Example: "  openldap-cli config acl revoke 'olcDatabase={1}mdb,cn=config' --group readers",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db := strings.TrimSpace(args[0])
+		who, err := aclWho(aclRevokeGroup, aclRevokeDN)
+		if err != nil {
+			return err
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		removed, err := cc.RemoveAccessGrantee(db, who)
+		if err != nil {
+			return fmt.Errorf("revoke on %s: %w", db, err)
+		}
+		log.Debug().Str("db", db).Str("who", who).Int("removed", removed).Msg("olcAccess revoke")
+		return out.Emit(okResult{Action: fmt.Sprintf("revoked %d clause(s) for %s on", removed, who), DN: db})
+	},
+}
+
 // ---- set (generic cn=config attribute) ----------------------------------
 
 var configSetCmd = &cobra.Command{
@@ -295,7 +405,12 @@ func init() {
 	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd)
 	configDBCmd.AddCommand(configDBListCmd, configDBResizeCmd)
 	configOverlayCmd.AddCommand(configOverlayListCmd)
-	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd)
+	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")
+	configACLGrantCmd.Flags().StringVar(&aclGrantDN, "dn", "", "grant to this exact DN")
+	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")
+	configACLRevokeCmd.Flags().StringVar(&aclRevokeGroup, "group", "", "the group (name or DN) to revoke")
+	configACLRevokeCmd.Flags().StringVar(&aclRevokeDN, "dn", "", "the exact DN to revoke")
+	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd)
 	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)
 	rootCmd.AddCommand(configCmd)
 }

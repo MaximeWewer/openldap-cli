@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 	"github.com/MaximeWewer/openldap-cli/internal/pwd"
 )
@@ -84,7 +85,7 @@ var svcAddCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		newACL, appended, err := cc.InjectAccess(svcACLDB, svcAddSubtree, dn, svcAddAccess)
+		newACL, appended, err := cc.InjectAccess(svcACLDB, svcAddSubtree, acl.DNWho(dn), svcAddAccess)
 		if err != nil {
 			return fmt.Errorf("account created, but ACL injection failed: %w", err)
 		}
@@ -170,7 +171,7 @@ var svcDeleteCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		removed, err := cc.RemoveAccessGrantee(svcACLDB, dn)
+		removed, err := cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(dn))
 		if err != nil {
 			return fmt.Errorf("entry deleted, but ACL cleanup failed: %w", err)
 		}
@@ -252,7 +253,7 @@ var svcInfoCmd = &cobra.Command{
 			if dbs, serr := cc.Search("cn=config", "(olcAccess=*)", []string{"olcAccess"}); serr == nil {
 				for _, db := range dbs {
 					for _, v := range db.GetAll("olcAccess") {
-						if strings.Contains(v, fmt.Sprintf(`dn.exact="%s"`, dn)) {
+						if strings.Contains(v, acl.DNWho(dn)) {
 							res.ACLRules = append(res.ACLRules, db.DN+" :: "+v)
 						}
 					}

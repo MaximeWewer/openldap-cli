@@ -255,6 +255,8 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas)     |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
 | `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
+| `config acl grant <database-dn> <subtree> --access <a> (--group <g> \| --dn <d>)` | add a `by <who> <access>` clause to the rule for `<subtree>`; `--group` grants **all its members** (scalable multi-SA access) |
+| `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN                                                                          |
 | `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)                                                        |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                           |
 | `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits`                                                     |
@@ -313,6 +315,13 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   `by * none` blocks every identity the broader rule served on that entry
   (rootDN excepted) — give it a `by * break` (or the needed `by …` clauses)
   first, editing the rule with `config set`.
+- **Several accounts, same tree → one rule (or a group), not two rules.**
+  Evaluation stops at the first rule whose `to` matches, so a **second rule with
+  the same `to`** is dead — the first grantee works, the rest silently don't.
+  Grant all of them in the **same** rule instead: `config acl grant` inserts a
+  `by <who>` clause into the existing rule (multiple `by` clauses coexist, one
+  per identity). For many/rotating accounts, grant a **group** once
+  (`--group readers`) and manage membership — no ACL edits per account.
 - **Generated passwords adapt to the policy.** `user passwd` / `user add` /
   `users passwd` size the generated password to the effective `pwdMinLength`
   (resolved from the user's `pwdPolicySubentry`, the overlay `olcPPolicyDefault`
@@ -450,6 +459,11 @@ openldap-cli config db list
 openldap-cli config overlay list
 openldap-cli config acl list 'olcDatabase={1}mdb,cn=config'
 openldap-cli --profile prod-root config acl move 'olcDatabase={1}mdb,cn=config' 8 5   # raise a shadowed rule
+# several service accounts, same rights on a tree -> one group grant:
+openldap-cli group create readers --member svc.a
+openldap-cli group add-member readers svc.b
+openldap-cli --profile prod-root config acl grant 'olcDatabase={1}mdb,cn=config' \
+  'ou=app,dc=example,dc=org' --group readers --access read
 openldap-cli --profile prod-root config db resize 'olcDatabase={2}mdb,cn=config' 4GiB # olcDbMaxSize
 openldap-cli --profile prod-root config limits set --size 5000                        # raise the search cap
 
