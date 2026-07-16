@@ -150,9 +150,9 @@ var ouRenameCmd = &cobra.Command{
 	Short: "Rename an OU (modrdn); entries below it follow",
 	Long: "Renames ou=<name> to ou=<new-name> under the same parent. The entries\n" +
 		"below it keep their place and their DNs follow the new name.\n\n" +
-		"olcAccess is NOT rewritten: any rule naming the old DN (its own, or one of\n" +
-		"the entries under it) stops matching silently. Rules that do are listed as\n" +
-		"a warning — re-grant them against the new DN.\n\n" +
+		"The olcAccess rules naming the old DN — its own, or the entries under it —\n" +
+		"are re-pointed at the new one, because slapd rewrites none of them and such\n" +
+		"a rule silently stops matching. Needs the config bind; --no-fix-acl skips it.\n\n" +
 		"To move an OU under a different parent, use `entry rename --newsuperior`.",
 	Args:    cobra.ExactArgs(2),
 	Example: "  openldap-cli ou rename contractors externals",
@@ -180,7 +180,9 @@ var ouRenameCmd = &cobra.Command{
 			return fmt.Errorf("rename %s: %w", dn, err)
 		}
 		log.Debug().Str("from", dn).Str("to", newDN).Msg("ou renamed")
-		warnStaleACLRefs(dn)
+		if err := fixACLRefs(dn, newDN); err != nil {
+			return err
+		}
 		return out.Emit(okResult{Action: "renamed to", DN: newDN})
 	},
 }
@@ -214,6 +216,7 @@ func init() {
 	for _, c := range []*cobra.Command{ouCreateCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd} {
 		c.Flags().StringVar(&ouParent, "parent", "", "parent DN (default: base DN)")
 	}
+	withFixACLFlag(ouRenameCmd)
 	ouCmd.AddCommand(ouCreateCmd, ouListCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd)
 	rootCmd.AddCommand(ouCmd)
 }

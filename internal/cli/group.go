@@ -207,12 +207,10 @@ var groupRenameCmd = &cobra.Command{
 	Short: "Rename a group (cn modrdn)",
 	Long: "Renames cn=<name> to cn=<new-name>. Members are untouched, and their\n" +
 		"memberOf follows the new DN (the memberof overlay maintains it).\n\n" +
-		"olcAccess is NOT rewritten: a rule granting `group.exact=\"cn=<name>,…\"`\n" +
-		"keeps naming the old DN and silently stops matching, so every member loses\n" +
-		"that access. Rules that do are listed as a warning — re-grant them with\n" +
-		"`config acl grant --group <new-name>` and revoke the old clause by passing\n" +
-		"its full old DN to `config acl revoke --group` (the old name no longer\n" +
-		"resolves).",
+		"The olcAccess rules granting `group.exact=\"cn=<name>,…\"` are re-pointed at\n" +
+		"the new DN: slapd rewrites none of them, so such a rule would keep naming a\n" +
+		"DN that no longer exists and every member would silently lose that access.\n" +
+		"Needs the config bind; --no-fix-acl skips it.",
 	Args:    cobra.ExactArgs(2),
 	Example: "  openldap-cli group rename devs engineers",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -236,7 +234,9 @@ var groupRenameCmd = &cobra.Command{
 		}
 		newDN := "cn=" + newName + "," + cli.GroupBase()
 		log.Debug().Str("from", g.DN).Str("to", newDN).Msg("group renamed")
-		warnStaleACLRefs(g.DN)
+		if err := fixACLRefs(g.DN, newDN); err != nil {
+			return err
+		}
 		return out.Emit(okResult{Action: "renamed to", DN: newDN})
 	},
 }
@@ -288,6 +288,7 @@ var groupInfoCmd = &cobra.Command{
 func init() {
 	groupCreateCmd.Flags().StringArrayVar(&groupCreateMembers, "member", nil, "member login (repeatable)")
 	groupListCmd.Flags().BoolVar(&groupListMembers, "members", false, "include member DNs")
+	withFixACLFlag(groupRenameCmd)
 	groupCmd.AddCommand(groupCreateCmd, groupAddMemberCmd, groupRemoveMemberCmd,
 		groupSetCmd, groupRenameCmd, groupDeleteCmd, groupInfoCmd)
 	rootCmd.AddCommand(groupCmd)

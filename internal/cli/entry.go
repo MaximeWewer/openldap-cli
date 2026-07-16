@@ -161,6 +161,12 @@ var entryRenameCmd = &cobra.Command{
 			newDN += "," + parent
 		}
 		log.Debug().Str("from", dn).Str("rdn", newRDN).Msg("entry renamed")
+		// only for data entries: a cn=config DN is not what olcAccess grants on
+		if !entryConfigBind {
+			if err := fixACLRefs(dn, newDN); err != nil {
+				return err
+			}
+		}
 		return out.Emit(okResult{Action: "renamed to", DN: newDN})
 	},
 }
@@ -193,6 +199,7 @@ func init() {
 	entrySetCmd.Flags().BoolVar(&entrySetAdd, "add", false, "append the value(s) instead of replacing the attribute")
 	entryRenameCmd.Flags().StringVar(&entryNewSuperior, "newsuperior", "", "new parent DN (move the entry)")
 	entryRenameCmd.Flags().BoolVar(&entryKeepOldRDN, "keep-old-rdn", false, "keep the old RDN value as an attribute (deleteOldRDN=false)")
+	withFixACLFlag(entryRenameCmd)
 
 	entryCmd.AddCommand(entryGetCmd, entryAddCmd, entrySetCmd, entryRenameCmd, entryDeleteCmd)
 	rootCmd.AddCommand(entryCmd)

@@ -1,56 +1,65 @@
 package cli
 
 import (
-	"strings"
+	"fmt"
 
 	"github.com/rs/zerolog/log"
+	"github.com/spf13/cobra"
 )
 
-// warnStaleACLRefs reports olcAccess rules that still name oldDN after a rename.
+// noFixACL backs the --no-fix-acl flag on every command that changes a DN.
+var noFixACL bool
+
+// withFixACLFlag registers --no-fix-acl on a command that moves an entry.
+func withFixACLFlag(cmds ...*cobra.Command) {
+	for _, c := range cmds {
+		c.Flags().BoolVar(&noFixACL, "no-fix-acl", false,
+			"do not re-point the olcAccess rules naming the old DN (they will silently stop matching)")
+	}
+}
+
+// fixACLRefs re-points the olcAccess rules naming oldDN at newDN, after a
+// rename has moved the entry.
 //
-// slapd rewrites nothing in olcAccess when an entry is renamed: a rule saying
-// `by group.exact="cn=old,…"` or `to dn.subtree="ou=old,…"` keeps pointing at a
-// DN that no longer exists, so it silently stops matching — the access is gone
-// with no error anywhere. (memberOf, by contrast, IS maintained by the memberof
-// overlay, so group membership survives a rename.)
+// slapd rewrites nothing on its own: a rule saying `by group.exact="cn=old,…"`
+// or `to dn.subtree="ou=old,…"` keeps naming a DN that no longer exists, so it
+// stops matching and the access it granted is silently lost. (memberOf is not
+// affected — the memberof overlay maintains it across a rename.) Leaving that
+// to the operator means leaving it undone, so this runs by default.
 //
-// Rules are matched on the DN as a substring, which also catches the rules
-// naming entries BELOW a renamed container — those moved too.
+// It is called AFTER the rename: repairing first would point the rules at a DN
+// that does not exist yet if the rename then failed. The rename is the caller's
+// intent and has already succeeded, so a repair failure is reported (the caller
+// surfaces it) rather than rolled back.
 //
-// Checking needs the config bind. Without it we say so rather than imply the
-// rename was clean; a failed check is never fatal, the rename already happened.
-func warnStaleACLRefs(oldDN string) {
+// Needs the config bind. Without it we cannot even read olcAccess, so we say so
+// instead of implying the rename was clean.
+func fixACLRefs(oldDN, newDN string) error {
+	if noFixACL {
+		log.Debug().Str("old_dn", oldDN).Msg("--no-fix-acl: leaving olcAccess alone")
+		return nil
+	}
 	cc, err := connectConfig()
 	if err != nil {
-		log.Warn().Str("dn", oldDN).Msg("could not check olcAccess for rules naming the old DN (no config bind): review them by hand")
-		return
+		log.Warn().Str("old_dn", oldDN).
+			Msg("renamed, but olcAccess was NOT checked (no config bind): any rule naming the old DN now matches nothing — review by hand, or set config_bind_dn")
+		return nil
 	}
 	defer cc.Close()
 
 	db, err := cc.DataDatabaseDN(cc.Config().BaseDN)
 	if err != nil {
-		log.Warn().Err(err).Msg("could not locate the database to check olcAccess for the old DN")
-		return
+		return fmt.Errorf("renamed, but the database holding olcAccess could not be located to repair it: %w", err)
 	}
-	e, err := cc.ReadEntry(db, []string{"olcAccess"})
+	rewritten, skipped, err := cc.RenameAccessDN(db, oldDN, newDN)
 	if err != nil {
-		log.Warn().Err(err).Msg("could not read olcAccess to check for the old DN")
-		return
+		return fmt.Errorf("renamed, but repairing olcAccess on %s FAILED — rules still name %q and grant nothing: %w", db, oldDN, err)
 	}
-
-	needle := strings.ToLower(oldDN)
-	var stale []string
-	for _, v := range e.GetAll("olcAccess") {
-		if strings.Contains(strings.ToLower(v), needle) {
-			stale = append(stale, v)
-		}
+	if rewritten > 0 {
+		log.Info().Int("dns", rewritten).Str("db", db).Msg("olcAccess re-pointed at the new DN")
 	}
-	if len(stale) == 0 {
-		return
+	for _, s := range skipped {
+		log.Warn().Msg("olcAccess rule names the old DN but uses regex=/set=, which cannot be rewritten safely — fix it by hand: " + s)
 	}
-	log.Warn().Int("rules", len(stale)).Str("old_dn", oldDN).Str("db", db).
-		Msg("olcAccess still names the OLD DN — those rules no longer match anything and their access is silently lost; re-grant them against the new DN")
-	for _, v := range stale {
-		log.Warn().Msg("  " + v)
-	}
+	return nil
 }

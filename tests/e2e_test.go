@@ -163,6 +163,22 @@ func TestCLI(t *testing.T) {
 			t.Error("group info: the old name still resolves after a rename")
 		}
 		run(t, admin, adPW, "group", "rename", "e2e.eng", "e2e.devs")
+
+		// a rename must carry its ACLs with it: slapd rewrites none of them, so
+		// an un-repaired grant keeps naming a DN that no longer exists and
+		// silently grants nothing.
+		db := "olcDatabase={1}mdb,cn=config"
+		run(t, admin, adPW, "config", "acl", "grant", db, "ou=service-accounts,dc=example,dc=org",
+			"--group", "e2e.devs", "--access", "read", "--at", "2")
+		run(t, admin, adPW, "group", "rename", "e2e.devs", "e2e.eng")
+		has(t, run(t, admin, adPW, "config", "acl", "list", db), `group.exact="cn=e2e.eng,ou=groups,dc=example,dc=org"`)
+		if strings.Contains(run(t, admin, adPW, "config", "acl", "list", db), "cn=e2e.devs,ou=groups") {
+			t.Error("config acl: a rule still names the old group DN after a rename")
+		}
+		// --no-fix-acl leaves the rule naming the old DN, on purpose
+		run(t, admin, adPW, "group", "rename", "e2e.eng", "e2e.devs", "--no-fix-acl")
+		has(t, run(t, admin, adPW, "config", "acl", "list", db), `group.exact="cn=e2e.eng,ou=groups,dc=example,dc=org"`)
+		run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "cn=e2e.eng,ou=groups,dc=example,dc=org")
 	})
 
 	t.Run("bulk", func(t *testing.T) {

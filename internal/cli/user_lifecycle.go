@@ -235,6 +235,9 @@ var userRenameCmd = &cobra.Command{
 			return fmt.Errorf("refresh attrs on %s: %w", newDN, err)
 		}
 		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user renamed")
+		if err := fixACLRefs(entry.DN, newDN); err != nil {
+			return err
+		}
 		return out.Emit(okResult{Action: "renamed to", DN: newDN})
 	},
 }
@@ -266,10 +269,14 @@ var userMoveCmd = &cobra.Command{
 		}
 		newDN := rdn + "," + newParent
 		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user moved")
+		if err := fixACLRefs(entry.DN, newDN); err != nil {
+			return err
+		}
 		return out.Emit(okResult{Action: "moved to", DN: newDN})
 	},
 }
 
 func init() {
+	withFixACLFlag(userRenameCmd, userMoveCmd)
 	userCmd.AddCommand(userDeleteCmd, userInfoCmd, userSetCmd, userRenameCmd, userMoveCmd)
 }

@@ -19,6 +19,25 @@ type Edit struct {
 	Add    string
 }
 
+// indexedRule is one olcAccess value split into its {N} index and its body.
+type indexedRule struct {
+	idx  int
+	body string
+}
+
+// splitRules parses the olcAccess values and orders them by their {N} index —
+// the order slapd evaluates them in, and the order a whole-attribute replace
+// must preserve. The server's response order is not guaranteed to match.
+func splitRules(values []string) []indexedRule {
+	rules := make([]indexedRule, 0, len(values))
+	for _, v := range values {
+		idx, body := SplitIndexed(v)
+		rules = append(rules, indexedRule{idx, strings.TrimSpace(body)})
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
+	return rules
+}
+
 // SplitIndexed splits "{2}to ..." into (2, "to ..."). Returns (-1, v) if none.
 func SplitIndexed(v string) (int, string) {
 	if strings.HasPrefix(v, "{") {
@@ -183,18 +202,7 @@ func RemoveGranteeOn(values []string, who, target string) (bodies []string, remo
 
 // removeGrantee strips who's clauses from the rules match accepts (nil = all).
 func removeGrantee(values []string, who string, match func(selector) bool) (bodies []string, removed, dropped int) {
-	type rule struct {
-		idx  int
-		body string
-	}
-	rules := make([]rule, 0, len(values))
-	for _, v := range values {
-		idx, body := SplitIndexed(v)
-		rules = append(rules, rule{idx, strings.TrimSpace(body)})
-	}
-	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
-
-	for _, r := range rules {
+	for _, r := range splitRules(values) {
 		if !strings.Contains(r.body, who) {
 			bodies = append(bodies, r.body)
 			continue

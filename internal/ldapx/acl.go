@@ -22,6 +22,22 @@ func (c *Client) InjectAccess(dbDN string, o acl.InjectOpts) (rule string, appen
 	return edit.Add, appended, c.Modify(dbDN, mods)
 }
 
+// RenameAccessDN re-points every olcAccess rule naming oldDN (or an entry
+// beneath it) at newDN, so a rename does not silently orphan its ACLs. Returns
+// how many DNs were rewritten and the rules that need manual review.
+func (c *Client) RenameAccessDN(dbDN, oldDN, newDN string) (rewritten int, skipped []string, err error) {
+	e, err := c.ReadEntry(dbDN, []string{"olcAccess"})
+	if err != nil {
+		return 0, nil, err
+	}
+	bodies, rewritten, skipped := acl.RenameDN(e.GetAll("olcAccess"), oldDN, newDN)
+	if rewritten == 0 {
+		return 0, skipped, nil
+	}
+	// one replace of the whole ordered attribute: see acl.RemoveGrantee.
+	return rewritten, skipped, c.Modify(dbDN, []Mod{{Op: ModReplace, Name: "olcAccess", Values: bodies}})
+}
+
 // RemoveAccessGrantee strips every clause referencing who (a full who-token)
 // from olcAccess on dbDN, dropping any rule left with nothing to say. Reports
 // how many clauses were removed and how many rules that emptied out.

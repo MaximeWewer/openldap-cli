@@ -163,7 +163,7 @@ cover. Uses the data bind; `--config-bind` targets `cn=config`.
 | `entry get <dn> [attr...]`                                          | read one entry (base scope; all attrs if none named) — like `ldapsearch`                  |
 | `entry add <dn> <attr=value>...`                                    | create an entry from `attr=value` pairs (repeat a name for multi-values) — like `ldapadd` |
 | `entry set <dn> <attr> [value...] [--add]`                          | replace an attribute; no value = delete it; `--add` appends — like `ldapmodify`           |
-| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn]` | modrdn / move — like `ldapmodrdn`                                                         |
+| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn] [--no-fix-acl]` | modrdn / move — like `ldapmodrdn`; re-points the `olcAccess` rules naming the old DN (data entries only) |
 | `entry delete <dn>`                                                 | delete any leaf entry — like `ldapdelete`                                                 |
 
 ### user
@@ -175,10 +175,10 @@ cover. Uses the data bind; `--config-bind` targets `cn=config`.
 | `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy                                                                                                                                                                                                                                                                                        |
 | `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                                       |
 | `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                               |
-| `user rename <old> <new.login>`                                                                                      | cn modrdn + refresh derived attrs (refint rewrites group member DNs)                                                                                                                                                                                                                                                                                  |
+| `user rename <old> <new.login>` `[--no-fix-acl]`                                                                     | cn modrdn + refresh derived attrs (refint rewrites group member DNs); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                  |
 | `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                    |
 | `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                |
-| `user move <login> <new-parent-dn>`                                                                                  | modrdn to another OU (keeps RDN)                                                                                                                                                                                                                                                                                                                      |
+| `user move <login> <new-parent-dn>` `[--no-fix-acl]`                                                                 | modrdn to another OU (keeps RDN); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                                                      |
 
 (Listing, import and export are inherently set-oriented — see `users` below.)
 
@@ -211,11 +211,11 @@ aborts on the first failure (default: continue, per-item result).
 | `group info <name>`                                   | (listing is `groups list`)                     |
 | `group add-member <group> <login…>` / `remove-member` | removing the last member violates groupOfNames |
 | `group set <name> <attr> [value…]`                    | replace an attribute (no value deletes it). Use `add-member` for membership — this replaces the whole attribute |
-| `group rename <name> <new-name>`                      | `cn` modrdn. `memberOf` follows, **`olcAccess` does not**: a `group.exact="cn=<old>,…"` grant silently stops matching (warned about — see Gotchas) |
+| `group rename <name> <new-name>` `[--no-fix-acl]`     | `cn` modrdn. `memberOf` follows on its own; the `olcAccess` rules naming the old DN are **re-pointed at the new one** (needs the config bind — see Gotchas) |
 | `group delete <name>`                                 |                                                |
 | `ou create <name> [--parent DN]`                      | parent must be ACL-writable by your bind       |
 | `ou info <name> [--parent]` / `ou set <name> <attr> [value…]` | read an OU / replace an attribute (no value deletes it) |
-| `ou rename <name> <new-name> [--parent]`              | `ou` modrdn; entries below it follow. Same `olcAccess` caveat as `group rename`. To change parent, use `entry rename --newsuperior` |
+| `ou rename <name> <new-name> [--parent] [--no-fix-acl]` | `ou` modrdn; entries below it follow, and so do the `olcAccess` rules naming them. To change parent, use `entry rename --newsuperior` |
 | `ou list` / `ou delete <name> [--parent]`             | delete refuses a non-empty OU                  |
 
 ### ppolicy (writes to `ou=policies` need a rootDN bind)
@@ -332,16 +332,20 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   `by <who>` clause into the existing rule (multiple `by` clauses coexist, one
   per identity). For many/rotating accounts, grant a **group** once
   (`--group readers`) and manage membership — no ACL edits per account.
-- **A rename silently breaks the ACLs naming the old DN.** slapd rewrites
-  nothing in `olcAccess`: after `group rename devs engineers`, a rule granting
-  `group.exact="cn=devs,…"` still names a DN that no longer exists, so it stops
-  matching and every member loses that access **with no error anywhere**. Same
-  for `ou rename` and rules naming the OU or the entries under it. (`memberOf`
-  is fine — the memberof overlay maintains it across a rename.) `group rename` /
-  `ou rename` list the affected rules as a warning; re-grant them against the new
-  DN. To revoke the stale clause, pass its **full old DN** —
-  `config acl revoke --group 'cn=devs,ou=groups,dc=example,dc=org'` — because the
-  old *name* no longer resolves to anything.
+- **A rename carries its ACLs with it — the CLI repairs them for you.** slapd
+  rewrites nothing in `olcAccess`: on its own, after `group rename devs
+  engineers`, a rule granting `group.exact="cn=devs,…"` would still name a DN
+  that no longer exists, stop matching, and drop every member's access **with no
+  error anywhere** (the client sees `noSuchObject`, not "denied"). So every
+  command that changes a DN — `user rename`, `user move`, `group rename`,
+  `ou rename`, `entry rename` — re-points the rules naming the old DN at the new
+  one, including the `filter=(memberOf=…)` of a `svc grant --members-of` and the
+  rules naming entries *below* a renamed container. `memberOf` needs nothing: the
+  memberof overlay maintains it. This needs the **config bind**; without it the
+  rename still happens and says loudly that the ACLs were not checked.
+  `--no-fix-acl` opts out. Two rule forms cannot be rewritten mechanically and
+  are reported for review instead: `dn.regex=` (a literal substitution can change
+  what a pattern matches) and `set=`.
 - **Generated passwords adapt to the policy.** `user passwd` / `user add` /
   `users passwd` size the generated password to the effective `pwdMinLength`
   (resolved from the user's `pwdPolicySubentry`, the overlay `olcPPolicyDefault`
