@@ -2,16 +2,15 @@ package ldapx
 
 import "github.com/MaximeWewer/openldap-cli/internal/acl"
 
-// InjectAccess grants `who` (a full olcAccess who-token, e.g. acl.DNWho(dn) or
-// acl.GroupWho(dn)) the given access to subtree by editing olcAccess on dbDN (an
-// ordered attribute). Returns the resulting rule and whether it was appended at
-// the end (vs inserted into an existing rule).
-func (c *Client) InjectAccess(dbDN, subtree, who, access string) (rule string, appended bool, err error) {
+// InjectAccess applies an acl.InjectOpts grant by editing olcAccess on dbDN (an
+// ordered attribute). Returns the resulting rule and whether a NEW rule was
+// created (vs a `by` clause added to an existing one).
+func (c *Client) InjectAccess(dbDN string, o acl.InjectOpts) (rule string, appended bool, err error) {
 	e, err := c.ReadEntry(dbDN, []string{"olcAccess"})
 	if err != nil {
 		return "", false, err
 	}
-	edit, appended := acl.Inject(e.GetAll("olcAccess"), subtree, who, access)
+	edit, appended := acl.Inject(e.GetAll("olcAccess"), o)
 	var mods []Mod
 	if edit.Delete != "" {
 		mods = append(mods, Mod{Op: ModDelete, Name: "olcAccess", Values: []string{edit.Delete}})

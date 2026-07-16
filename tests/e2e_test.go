@@ -210,6 +210,14 @@ func TestCLI(t *testing.T) {
 			`granted read to group.exact="cn=e2e.devs`)
 		has(t, run(t, admin, adPW, "config", "acl", "list", db), `by group.exact="cn=e2e.devs`)
 		has(t, run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs"), "revoked 1 clause")
+		// the "app must search a tree and read only some entries" pattern:
+		// base-scope container grant + filtered read grant, both placed by --at
+		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org",
+			"--group", "e2e.devs", "--access", "search", "--scope", "base", "--at", "4"), `to dn.base="ou=users`)
+		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org",
+			"--group", "e2e.devs", "--access", "read", "--at", "5",
+			"--filter", "(memberOf=cn=e2e.devs,ou=groups,dc=example,dc=org)"), "filter=(memberOf=cn=e2e.devs")
+		run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})

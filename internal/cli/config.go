@@ -249,6 +249,10 @@ var (
 	aclGrantGroup  string
 	aclGrantDN     string
 	aclGrantAccess string
+	aclGrantScope  string
+	aclGrantFilter string
+	aclGrantAt     int
+	aclGrantTerm   string
 	aclRevokeGroup string
 	aclRevokeDN    string
 )
@@ -291,20 +295,39 @@ func aclWho(group, dn string) (string, error) {
 var configACLGrantCmd = &cobra.Command{
 	Use:   "grant <database-dn> <subtree> --access <a> (--group <g> | --dn <d>)",
 	Short: "Add a `by <who> <access>` clause to the rule protecting <subtree>",
-	Long: "Grants access on <subtree> to a group (--group, all its members share the\n" +
-		"right — the scalable way to give several service accounts the same access)\n" +
-		"or a single DN (--dn). The clause is inserted into the EXISTING rule for\n" +
-		"<subtree> (before `by * none`), so multiple grantees coexist; a second rule\n" +
-		"with the same target would be dead. If a new rule is appended, order it with\n" +
-		"`config acl move` so it isn't shadowed by a broader rule above.",
+	Long: "Grants access on <target> to a group (--group, all its members share the\n" +
+		"right) or a single DN (--dn). The clause is inserted into the EXISTING rule\n" +
+		"with the same selector, so multiple grantees coexist; a second rule with the\n" +
+		"same `to` would be dead.\n\n" +
+		"An app that must SEARCH a tree usually needs two grants: --scope base on the\n" +
+		"container (to base/traverse the search) and a subtree grant to read entries,\n" +
+		"optionally narrowed with --filter for least privilege. Use --at to place a\n" +
+		"new rule ABOVE the broader rule that would otherwise shadow it.",
 	Args: cobra.ExactArgs(2),
-	Example: "  # give every member of cn=readers read on a tree\n" +
-		"  openldap-cli config acl grant 'olcDatabase={1}mdb,cn=config' \\\n" +
-		"      'cn=vcf-admin,ou=groups,dc=example,dc=org' --group readers --access read",
+	Example: "  # let an app search ou=users and read ONLY members of a group\n" +
+		"  openldap-cli config acl grant <db> 'ou=users,dc=example,dc=org' \\\n" +
+		"      --dn 'cn=app,ou=service-accounts,dc=example,dc=org' --access search --scope base --at 6\n" +
+		"  openldap-cli config acl grant <db> 'ou=users,dc=example,dc=org' \\\n" +
+		"      --dn 'cn=app,ou=service-accounts,dc=example,dc=org' --access read \\\n" +
+		"      --filter '(memberOf=cn=admins,ou=groups,dc=example,dc=org)' --at 7",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		db, subtree := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
+		db, target := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
 		if !validAccess(aclGrantAccess) {
 			return fmt.Errorf("--access must be one of none|disclose|auth|compare|search|read|write|manage")
+		}
+		scope := strings.TrimSpace(aclGrantScope)
+		switch scope {
+		case "sub", "subtree":
+			scope = "subtree"
+		case "base":
+		default:
+			return fmt.Errorf("--scope must be sub or base")
+		}
+		if aclGrantTerm != "break" && aclGrantTerm != "none" {
+			return fmt.Errorf("--terminator must be break or none")
+		}
+		if f := strings.TrimSpace(aclGrantFilter); f != "" && !strings.HasPrefix(f, "(") {
+			return fmt.Errorf("--filter must be an LDAP filter, e.g. '(memberOf=cn=g,dc=x)'")
 		}
 		who, err := aclWho(aclGrantGroup, aclGrantDN)
 		if err != nil {
@@ -315,14 +338,17 @@ var configACLGrantCmd = &cobra.Command{
 			return err
 		}
 		defer cc.Close()
-		rule, appended, err := cc.InjectAccess(db, subtree, who, aclGrantAccess)
+		rule, appended, err := cc.InjectAccess(db, acl.InjectOpts{
+			Target: target, Scope: scope, Filter: strings.TrimSpace(aclGrantFilter),
+			Who: who, Access: aclGrantAccess, Terminator: aclGrantTerm, At: aclGrantAt,
+		})
 		if err != nil {
 			return fmt.Errorf("grant on %s: %w", db, err)
 		}
-		log.Debug().Str("db", db).Str("who", who).Bool("appended", appended).Msg("olcAccess grant")
+		log.Debug().Str("db", db).Str("who", who).Bool("new_rule", appended).Msg("olcAccess grant")
 		res := okResult{Action: "granted " + aclGrantAccess + " to " + who + " on", DN: db, Detail: rule}
-		if appended {
-			res.Detail = rule + "\n  (appended at end — order it with `config acl move` so a broad rule above doesn't shadow it)"
+		if appended && aclGrantAt < 0 {
+			res.Detail = rule + "\n  (new rule appended at the end — place it with --at, or move it with `config acl move`, so a broader rule above doesn't shadow it)"
 		}
 		return out.Emit(res)
 	},
@@ -408,6 +434,10 @@ func init() {
 	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantDN, "dn", "", "grant to this exact DN")
 	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")
+	configACLGrantCmd.Flags().StringVar(&aclGrantScope, "scope", "sub", "rule scope: sub (the tree) or base (the container entry only, to traverse/search)")
+	configACLGrantCmd.Flags().StringVar(&aclGrantFilter, "filter", "", "narrow the rule to entries matching this LDAP filter, e.g. '(memberOf=cn=g,dc=x)'")
+	configACLGrantCmd.Flags().IntVar(&aclGrantAt, "at", -1, "index to insert a NEW rule at (default -1: append at the end)")
+	configACLGrantCmd.Flags().StringVar(&aclGrantTerm, "terminator", "break", "trailing `by *` of a NEW rule: break (additive) or none (blocks others)")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeGroup, "group", "", "the group (name or DN) to revoke")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeDN, "dn", "", "the exact DN to revoke")
 	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd)

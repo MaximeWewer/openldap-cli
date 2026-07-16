@@ -76,29 +76,73 @@ func DNWho(dn string) string { return fmt.Sprintf(`dn.exact="%s"`, dn) }
 // to give several service accounts the same rights on a tree.
 func GroupWho(groupDN string) string { return fmt.Sprintf(`group.exact="%s"`, groupDN) }
 
-// Inject adds `by <who> <access>` to the rule targeting subtree (before
-// `by * none`), or returns a new appended rule when none targets it. `who` is a
-// full olcAccess who-token, e.g. DNWho(dn) or GroupWho(dn). Adding it as a new
-// `by` clause in the SAME rule (rather than a second rule with the same `to`,
-// which would be dead) is what lets multiple grantees coexist on one tree.
-func Inject(values []string, subtree, who, access string) (edit Edit, appended bool) {
-	targetPrefix := fmt.Sprintf(`to dn.subtree="%s"`, subtree)
-	clause := fmt.Sprintf(`by %s %s`, who, access)
+// InjectOpts describes one olcAccess grant to inject.
+type InjectOpts struct {
+	Target string // the DN the rule protects
+	Scope  string // "subtree" (default) or "base" (the container entry only)
+	Filter string // optional LDAP filter — only entries matching it are covered
+	Who    string // who-token: DNWho(dn) / GroupWho(dn)
+	Access string // read, write, search, …
+
+	// Terminator is the trailing `by *` action of a NEW rule: "break" (default,
+	// additive — other identities fall through to the rules below) or "none".
+	Terminator string
+	// At is the index a NEW rule is inserted at; negative appends at the end.
+	// Placing it above a broader rule is what stops it being shadowed.
+	At int
+}
+
+// selector builds the rule's `to …` part.
+func (o InjectOpts) selector() string {
+	scope := o.Scope
+	if scope == "" {
+		scope = "subtree"
+	}
+	s := fmt.Sprintf("to dn.%s=%q", scope, o.Target)
+	if o.Filter != "" {
+		s += " filter=" + o.Filter
+	}
+	return s
+}
+
+// Inject adds `by <who> <access>` to the rule whose selector matches exactly
+// (before its trailing `by *` clause), or returns a new rule when none matches.
+// Adding a `by` clause to the SAME rule — rather than a second rule with the
+// same `to`, which would be dead — is what lets multiple grantees coexist.
+func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
+	sel := o.selector()
+	clause := fmt.Sprintf("by %s %s", o.Who, o.Access)
 
 	for _, v := range values {
 		idx, body := SplitIndexed(v)
-		if !strings.HasPrefix(strings.TrimSpace(body), targetPrefix) {
+		body = strings.TrimSpace(body)
+		rest, ok := strings.CutPrefix(body, sel)
+		// the selector must match exactly: what follows is the first `by`, not
+		// a further qualifier (e.g. a filter= we did not ask for).
+		if !ok || !strings.HasPrefix(strings.TrimSpace(rest), "by ") {
 			continue
 		}
 		var nb string
-		if strings.Contains(body, "by * none") {
+		switch {
+		case strings.Contains(body, "by * none"):
 			nb = strings.Replace(body, "by * none", clause+" by * none", 1)
-		} else {
+		case strings.Contains(body, "by * break"):
+			nb = strings.Replace(body, "by * break", clause+" by * break", 1)
+		default:
 			nb = strings.TrimRight(body, " ") + " " + clause
 		}
 		return Edit{Delete: v, Add: fmt.Sprintf("{%d}%s", idx, nb)}, false
 	}
-	return Edit{Add: fmt.Sprintf("%s %s by * none", targetPrefix, clause)}, true
+
+	term := o.Terminator
+	if term == "" {
+		term = "break"
+	}
+	rule := fmt.Sprintf("%s %s by * %s", sel, clause, term)
+	if o.At >= 0 {
+		rule = fmt.Sprintf("{%d}%s", o.At, rule)
+	}
+	return Edit{Add: rule}, true
 }
 
 // RemoveGrantee strips every `by <who> <access>` clause referencing who,

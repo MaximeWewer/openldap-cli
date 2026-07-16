@@ -1,6 +1,9 @@
 package acl
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSplitIndexed(t *testing.T) {
 	cases := []struct {
@@ -27,7 +30,7 @@ func TestInjectInsertsBeforeNone(t *testing.T) {
 		`{0}to attrs=userPassword by self write by * none`,
 		`{4}to dn.subtree="ou=users,dc=example,dc=org" by self write by * none`,
 	}
-	edit, appended := Inject(values, "ou=users,dc=example,dc=org", DNWho(svc), "read")
+	edit, appended := Inject(values, InjectOpts{Target: "ou=users,dc=example,dc=org", Who: DNWho(svc), Access: "read", At: -1})
 	if appended {
 		t.Fatal("expected insert, got append")
 	}
@@ -43,7 +46,7 @@ func TestInjectInsertsBeforeNone(t *testing.T) {
 func TestInjectAppendsWhenMissing(t *testing.T) {
 	svc := `cn=svc,ou=service-accounts,dc=example,dc=org`
 	values := []string{`{0}to attrs=userPassword by * none`}
-	edit, appended := Inject(values, "ou=contractors,dc=example,dc=org", DNWho(svc), "write")
+	edit, appended := Inject(values, InjectOpts{Target: "ou=contractors,dc=example,dc=org", Who: DNWho(svc), Access: "write", Terminator: "none", At: -1})
 	if !appended {
 		t.Fatal("expected append")
 	}
@@ -120,12 +123,49 @@ func TestReorder(t *testing.T) {
 func TestInjectGroupWho(t *testing.T) {
 	g := `cn=readers,ou=groups,dc=example,dc=org`
 	values := []string{`{4}to dn.subtree="ou=x,dc=example,dc=org" by dn.exact="cn=sa1,dc=example,dc=org" read by * none`}
-	edit, appended := Inject(values, "ou=x,dc=example,dc=org", GroupWho(g), "read")
+	edit, appended := Inject(values, InjectOpts{Target: "ou=x,dc=example,dc=org", Who: GroupWho(g), Access: "read", At: -1})
 	if appended {
 		t.Fatal("expected insert into existing rule")
 	}
 	want := `{4}to dn.subtree="ou=x,dc=example,dc=org" by dn.exact="cn=sa1,dc=example,dc=org" read by group.exact="` + g + `" read by * none`
 	if edit.Add != want {
 		t.Errorf("Add = %q, want %q", edit.Add, want)
+	}
+}
+
+func TestInjectFilterScopeAndPlacement(t *testing.T) {
+	sa := `cn=app,ou=service-accounts,dc=example,dc=org`
+	// a plain subtree rule must NOT be matched by a filtered grant (different selector)
+	values := []string{`{6}to dn.subtree="ou=users,dc=example,dc=org" by self write by * none`}
+
+	edit, isNew := Inject(values, InjectOpts{
+		Target: "ou=users,dc=example,dc=org", Filter: "(memberOf=cn=g,dc=example,dc=org)",
+		Who: DNWho(sa), Access: "read", At: 6,
+	})
+	if !isNew {
+		t.Fatal("filtered grant must create a NEW rule, not edit the unfiltered one")
+	}
+	want := `{6}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=example,dc=org) by dn.exact="` + sa + `" read by * break`
+	if edit.Add != want {
+		t.Errorf("Add = %q, want %q", edit.Add, want)
+	}
+
+	// base scope + default break terminator, appended
+	edit, isNew = Inject(nil, InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "base", Who: DNWho(sa), Access: "search", At: -1})
+	if !isNew {
+		t.Fatal("expected a new rule")
+	}
+	if edit.Add != `to dn.base="ou=users,dc=example,dc=org" by dn.exact="`+sa+`" search by * break` {
+		t.Errorf("base rule = %q", edit.Add)
+	}
+
+	// a second grantee on the SAME selector joins the existing rule (before by * break)
+	edit, isNew = Inject([]string{`{6}to dn.base="ou=users,dc=example,dc=org" by dn.exact="cn=a,dc=x" search by * break`},
+		InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "base", Who: DNWho(sa), Access: "search", At: -1})
+	if isNew {
+		t.Fatal("expected to join the existing rule")
+	}
+	if !strings.Contains(edit.Add, `by dn.exact="cn=a,dc=x" search by dn.exact="`+sa+`" search by * break`) {
+		t.Errorf("joined rule = %q", edit.Add)
 	}
 }

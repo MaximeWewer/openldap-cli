@@ -85,7 +85,11 @@ var svcAddCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		newACL, appended, err := cc.InjectAccess(svcACLDB, svcAddSubtree, acl.DNWho(dn), svcAddAccess)
+		// unchanged svc semantics: subtree scope, no filter, `by * none`, appended
+		newACL, appended, err := cc.InjectAccess(svcACLDB, acl.InjectOpts{
+			Target: svcAddSubtree, Who: acl.DNWho(dn), Access: svcAddAccess,
+			Terminator: "none", At: -1,
+		})
 		if err != nil {
 			return fmt.Errorf("account created, but ACL injection failed: %w", err)
 		}
