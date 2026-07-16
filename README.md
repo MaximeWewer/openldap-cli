@@ -230,6 +230,7 @@ aborts on the first failure (default: continue, per-item result).
 | `svc passwd <name> [--password]`                                |                                                                            |
 | `svc delete <name>`                                             | deletes entry **and** strips its ACL clauses                               |
 | `svc info <name>`                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)  |
+| `svc grant-read <name> --tree DN [--members-of <group>] [--access read]` | **the "an app must search a tree" recipe**: emits both rules it needs (container `search` + entry `read`), each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. `--members-of` narrows it to that group's members (least privilege) |
 
 `olcAccess` is ordered: edits delete `{N}old` + add `{N}new` in one modify. New
 rules for an un-covered subtree are **appended at the end** — verify they
@@ -312,10 +313,11 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   evaluated by index and evaluation **stops at the first matching `to` target**,
   so a specific rule below a broad one never fires (a classic cause of a
   `noSuchObject`/code 32 where the base entry's `disclose` was denied). Use
-  `config acl move` to raise it. **But** raising a narrow rule that ends in
-  `by * none` blocks every identity the broader rule served on that entry
-  (rootDN excepted) — give it a `by * break` (or the needed `by …` clauses)
-  first, editing the rule with `config set`.
+  `config acl move` to raise it — and **`config acl lint` finds these for you**
+  (it reports every rule an earlier one shadows). **But** raising a narrow rule
+  that ends in `by * none` blocks every identity the broader rule served on that
+  entry (rootDN excepted) — give it a `by * break` (or the needed `by …`
+  clauses) first, editing the rule with `config set`.
 - **Several accounts, same tree → one rule (or a group), not two rules.**
   Evaluation stops at the first rule whose `to` matches, so a **second rule with
   the same `to`** is dead — the first grantee works, the rest silently don't.
@@ -442,6 +444,27 @@ openldap-cli svc info backup-agent                           # shows the ACL cla
 openldap-cli svc passwd backup-agent
 openldap-cli svc delete backup-agent                         # also strips its ACL clauses
 ```
+
+### Give an app read access to a tree (the common recipe)
+
+An app that must **search** a tree needs two rules: one on the container (to base
+the search — without it a search fails with `noSuchObject` even when the entries
+are readable) and one on the entries. `svc grant-read` emits both, places each
+above whatever would shadow it, and terminates them with `by * break` so no other
+identity is affected:
+
+```bash
+# the app may list ONLY the members of a group (least privilege)
+openldap-cli svc grant-read app --tree ou=users,dc=example,dc=org --members-of admins
+# the app may list every group
+openldap-cli svc grant-read app --tree ou=groups,dc=example,dc=org
+
+openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'   # prove nothing is shadowed
+```
+
+Re-running is a no-op, so it is safe in a provisioning script. Prefer it over
+hand-writing `olcAccess`; drop to `config acl grant --scope/--filter/--at` only
+when you need a shape it does not cover.
 
 ### Password policies (writes need the rootDN)
 
