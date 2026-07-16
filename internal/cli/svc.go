@@ -27,7 +27,20 @@ func svcDN(cli *ldapx.Client, name string) string {
 	return "cn=" + name + "," + svcOU + "," + cli.Config().BaseDN
 }
 
-// ---- grant-read (the "an app must search a tree" recipe) ----------------
+// ---- grant (the "an app must search a tree" recipe) ---------------------
+
+// containerAccess is the access the container entry needs for the account to
+// use <tree> as a search base. Creating or deleting a child additionally needs
+// WRITE on the parent (slapd: "no write access to parent"), so a write-ish
+// grant must not settle for `search`.
+func containerAccess(entryAccess string) string {
+	switch entryAccess {
+	case "write", "manage":
+		return "write"
+	default:
+		return "search"
+	}
+}
 
 var (
 	svcGrantTree      string
@@ -35,24 +48,32 @@ var (
 	svcGrantAccess    string
 )
 
-var svcGrantReadCmd = &cobra.Command{
-	Use:   "grant-read <name>",
-	Short: "Let a service account search a tree and read its entries (both rules, auto-placed)",
-	Long: "Emits the two rules an app needs to SEARCH a tree and READ what is in it:\n\n" +
-		"  1. to dn.base=\"<tree>\"    by <sa> search by * break   — to base/traverse the search\n" +
-		"  2. to dn.subtree=\"<tree>\" [filter=(memberOf=<group>)] by <sa> read by * break\n\n" +
-		"Without rule 1 a search on <tree> fails with noSuchObject even though the\n" +
-		"entries are readable. Both rules end in `by * break`, so they are purely\n" +
-		"additive — no other identity loses access — and each is inserted ABOVE the\n" +
-		"first rule that would otherwise shadow it (no manual index needed).\n\n" +
-		"With --members-of the account sees ONLY that group's members (least\n" +
-		"privilege); needs the memberof overlay. Re-running is idempotent: the clause\n" +
-		"joins the existing rule instead of creating a duplicate.",
+var svcGrantCmd = &cobra.Command{
+	Use:     "grant <name>",
+	Aliases: []string{"grant-read"},
+	Short:   "Let a service account search a tree and read/write its entries (both rules, auto-placed)",
+	Long: "Emits the two rules an app needs to work on a tree:\n\n" +
+		"  1. to dn.base=\"<tree>\"    by <sa> <search|write> by * break   — the container\n" +
+		"  2. to dn.subtree=\"<tree>\" [filter=(memberOf=<group>)] by <sa> <access> by * break\n\n" +
+		"Rule 1 is what lets the account USE <tree> as a search base — without it a\n" +
+		"search fails with noSuchObject even though the entries are readable. Its\n" +
+		"access follows --access: `search` for a read-ish grant, `write` for\n" +
+		"--access write|manage, because creating or deleting a child needs write on\n" +
+		"the parent.\n\n" +
+		"Both rules end in `by * break`, so they are purely additive — no other\n" +
+		"identity loses access — and each is inserted ABOVE the first rule that would\n" +
+		"otherwise shadow it (no manual index needed). Re-running is a no-op.\n\n" +
+		"--members-of narrows rule 2 to that group's members (least privilege; needs\n" +
+		"the memberof overlay). It fits read and modify; a brand-new entry cannot\n" +
+		"match a memberOf filter before it exists, so creating entries needs an\n" +
+		"unfiltered grant.",
 	Args: cobra.ExactArgs(1),
-	Example: "  # the app may list only the members of a group\n" +
-		"  openldap-cli svc grant-read app --tree ou=users,dc=example,dc=org --members-of admins\n" +
-		"  # the app may list every group\n" +
-		"  openldap-cli svc grant-read app --tree ou=groups,dc=example,dc=org",
+	Example: "  # read-only: the app may list only the members of a group\n" +
+		"  openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins\n" +
+		"  # read-only: the app may list every group\n" +
+		"  openldap-cli svc grant app --tree ou=groups,dc=example,dc=org\n" +
+		"  # read-write: the app may also create/modify/delete entries in the tree\n" +
+		"  openldap-cli svc grant app --tree ou=devices,dc=example,dc=org --access write",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := strings.TrimSpace(args[0])
 		tree := strings.TrimSpace(svcGrantTree)
@@ -90,7 +111,7 @@ var svcGrantReadCmd = &cobra.Command{
 
 		who := acl.DNWho(sa)
 		steps := []acl.InjectOpts{
-			{Target: tree, Scope: "base", Who: who, Access: "search"},
+			{Target: tree, Scope: "base", Who: who, Access: containerAccess(svcGrantAccess)},
 			{Target: tree, Scope: "subtree", Filter: filter, Who: who, Access: svcGrantAccess},
 		}
 		var rules []string
@@ -397,10 +418,10 @@ func init() {
 	svcAddCmd.Flags().StringVar(&svcAddPassword, "password", "", "password (default: generate a 32-char one)")
 	svcPasswdCmd.Flags().StringVar(&svcPasswdValue, "password", "", "password (default: generate a 32-char one)")
 
-	svcGrantReadCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
-	svcGrantReadCmd.Flags().StringVar(&svcGrantMembersOf, "members-of", "", "only entries that are members of this group (name or DN) — least privilege")
-	svcGrantReadCmd.Flags().StringVar(&svcGrantAccess, "access", "read", "access level on the entries: read|search|write|…")
-	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantReadCmd)
+	svcGrantCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
+	svcGrantCmd.Flags().StringVar(&svcGrantMembersOf, "members-of", "", "only entries that are members of this group (name or DN) — least privilege")
+	svcGrantCmd.Flags().StringVar(&svcGrantAccess, "access", "read", "access level on the entries: read|search|write|manage (the container follows: search, or write for write|manage)")
+	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantCmd)
 	rootCmd.AddCommand(svcCmd)
 
 	svcsCmd.AddCommand(svcListCmd) // listing is plural
