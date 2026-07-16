@@ -5,8 +5,10 @@
 package ldapx_test
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/config"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
@@ -82,18 +84,33 @@ func TestACLRoundtripIntegration(t *testing.T) {
 		db  = "olcDatabase={1}mdb,cn=config"
 		svc = "cn=itest.svc,ou=service-accounts,dc=example,dc=org"
 	)
-	rule, _, err := c.InjectAccess(db, "ou=itest,dc=example,dc=org", svc, "read")
+	who := acl.DNWho(svc)
+	rule, _, err := c.InjectAccess(db, acl.InjectOpts{
+		Target: "ou=itest,dc=example,dc=org", Who: who, Access: "read", At: -1,
+	})
 	if err != nil {
 		t.Fatalf("InjectAccess: %v", err)
 	}
 	if rule == "" {
 		t.Error("empty resulting rule")
 	}
-	removed, err := c.RemoveAccessGrantee(db, svc)
+	// the injected rule is `by <who> read by * break`: revoking its only
+	// grantee must drop the whole rule, not leave a clauseless one behind
+	// (slapd would reject that and fail the revoke).
+	removed, dropped, err := c.RemoveAccessGrantee(db, who)
 	if err != nil {
 		t.Fatalf("RemoveAccessGrantee: %v", err)
 	}
-	if removed < 1 {
-		t.Errorf("removed = %d, want >= 1", removed)
+	if removed < 1 || dropped < 1 {
+		t.Errorf("removed = %d, dropped = %d, want >= 1 each", removed, dropped)
+	}
+	e, err := c.ReadEntry(db, []string{"olcAccess"})
+	if err != nil {
+		t.Fatalf("ReadEntry: %v", err)
+	}
+	for _, v := range e.GetAll("olcAccess") {
+		if strings.Contains(v, "ou=itest,dc=example,dc=org") {
+			t.Errorf("revoke left the rule behind: %s", v)
+		}
 	}
 }

@@ -151,26 +151,54 @@ func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 	return Edit{Add: rule}, true
 }
 
-// RemoveGrantee strips every `by <who> <access>` clause referencing who,
-// returning the edits to apply and how many clauses were removed. `who` is a
-// full who-token (DNWho/GroupWho).
-func RemoveGrantee(values []string, who string) (edits []Edit, removed int) {
-	needle := who
+// RemoveGrantee strips every `by <who> <access>` clause referencing who and
+// drops the rules that are left doing nothing. `who` is a full who-token
+// (DNWho/GroupWho).
+//
+// It returns the COMPLETE rule list in order, without index prefixes, for a
+// single olcAccess replace (the server renumbers {0},{1},… from it) — the same
+// mechanism as Reorder. A per-rule delete/add pair cannot work here: dropping a
+// rule shifts the index of every rule below it, so the adds would land on the
+// wrong ones.
+//
+// A rule is dropped when removing who leaves it with no `by` clause at all —
+// slapd rejects such a rule outright ("no by clause(s) specified in access
+// line"), which would make the whole revoke fail — or when every remaining
+// clause is `by * break`, i.e. it neither grants nor denies and only costs a
+// lookup. `by * none` is kept: that is a deliberate deny, and silently dropping
+// it would widen access.
+func RemoveGrantee(values []string, who string) (bodies []string, removed, dropped int) {
+	type rule struct {
+		idx  int
+		body string
+	}
+	rules := make([]rule, 0, len(values))
 	for _, v := range values {
-		if !strings.Contains(v, needle) {
+		idx, body := SplitIndexed(v)
+		rules = append(rules, rule{idx, strings.TrimSpace(body)})
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
+
+	for _, r := range rules {
+		if !strings.Contains(r.body, who) {
+			bodies = append(bodies, r.body)
 			continue
 		}
-		idx, body := SplitIndexed(v)
-		parts := strings.Split(body, " by ") // parts[0]="to <target>", rest="<who> <access>"
+		parts := strings.Split(r.body, " by ") // parts[0]="to <target>", rest="<who> <access>"
 		kept := []string{parts[0]}
 		for _, p := range parts[1:] {
-			if strings.Contains(p, needle) {
+			if strings.Contains(p, who) {
 				removed++
 				continue
 			}
 			kept = append(kept, p)
 		}
-		edits = append(edits, Edit{Delete: v, Add: fmt.Sprintf("{%d}%s", idx, strings.Join(kept, " by "))})
+		nb := strings.Join(kept, " by ")
+		if len(kept) == 1 || isNoOp(nb) {
+			dropped++
+			continue
+		}
+		bodies = append(bodies, nb)
 	}
-	return edits, removed
+	return bodies, removed, dropped
 }

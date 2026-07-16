@@ -23,21 +23,17 @@ func (c *Client) InjectAccess(dbDN string, o acl.InjectOpts) (rule string, appen
 }
 
 // RemoveAccessGrantee strips every clause referencing who (a full who-token)
-// from olcAccess on dbDN.
-func (c *Client) RemoveAccessGrantee(dbDN, who string) (removed int, err error) {
+// from olcAccess on dbDN, dropping any rule left with nothing to say. Reports
+// how many clauses were removed and how many rules that emptied out.
+func (c *Client) RemoveAccessGrantee(dbDN, who string) (removed, dropped int, err error) {
 	e, err := c.ReadEntry(dbDN, []string{"olcAccess"})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	edits, removed := acl.RemoveGrantee(e.GetAll("olcAccess"), who)
+	bodies, removed, dropped := acl.RemoveGrantee(e.GetAll("olcAccess"), who)
 	if removed == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
-	var mods []Mod
-	for _, ed := range edits {
-		mods = append(mods,
-			Mod{Op: ModDelete, Name: "olcAccess", Values: []string{ed.Delete}},
-			Mod{Op: ModAdd, Name: "olcAccess", Values: []string{ed.Add}})
-	}
-	return removed, c.Modify(dbDN, mods)
+	// one replace of the whole ordered attribute: see acl.RemoveGrantee.
+	return removed, dropped, c.Modify(dbDN, []Mod{{Op: ModReplace, Name: "olcAccess", Values: bodies}})
 }

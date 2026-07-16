@@ -288,12 +288,15 @@ var svcDeleteCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		removed, err := cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(dn))
+		removed, dropped, err := cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(dn))
 		if err != nil {
 			return fmt.Errorf("entry deleted, but ACL cleanup failed: %w", err)
 		}
-		log.Debug().Int("clauses", removed).Msg("acl cleaned")
+		log.Debug().Int("clauses", removed).Int("dropped", dropped).Msg("acl cleaned")
 		res.Note = fmt.Sprintf("removed %d ACL clause(s)", removed)
+		if dropped > 0 {
+			res.Note += fmt.Sprintf(", dropped %d now-empty rule(s)", dropped)
+		}
 		return out.Emit(res)
 	},
 }

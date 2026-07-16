@@ -560,12 +560,16 @@ var configACLRevokeCmd = &cobra.Command{
 			return err
 		}
 		defer cc.Close()
-		removed, err := cc.RemoveAccessGrantee(db, who)
+		removed, dropped, err := cc.RemoveAccessGrantee(db, who)
 		if err != nil {
 			return fmt.Errorf("revoke on %s: %w", db, err)
 		}
-		log.Debug().Str("db", db).Str("who", who).Int("removed", removed).Msg("olcAccess revoke")
-		return out.Emit(okResult{Action: fmt.Sprintf("revoked %d clause(s) for %s on", removed, who), DN: db})
+		log.Debug().Str("db", db).Str("who", who).Int("removed", removed).Int("dropped", dropped).Msg("olcAccess revoke")
+		action := fmt.Sprintf("revoked %d clause(s) for %s on", removed, who)
+		if dropped > 0 {
+			action = fmt.Sprintf("revoked %d clause(s) for %s (%d now-empty rule(s) dropped) on", removed, who, dropped)
+		}
+		return out.Emit(okResult{Action: action, DN: db})
 	},
 }
 

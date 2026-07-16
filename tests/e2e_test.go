@@ -225,6 +225,8 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org", "--group", "e2e.devs", "--access", "read"),
 			`granted read to group.exact="cn=e2e.devs`)
 		has(t, run(t, admin, adPW, "config", "acl", "list", db), `by group.exact="cn=e2e.devs`)
+		// this target already has a rule in the seed, so the grant only added a
+		// `by` clause to it: revoking leaves the rule's other clauses standing
 		has(t, run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs"), "revoked 1 clause")
 		// the "app must search a tree and read only some entries" pattern:
 		// base-scope container grant + filtered read grant, both placed by --at
@@ -233,8 +235,12 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org",
 			"--group", "e2e.devs", "--access", "read", "--at", "5",
 			"--filter", "(memberOf=cn=e2e.devs,ou=groups,dc=example,dc=org)"), "filter=(memberOf=cn=e2e.devs")
-		run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs")
-		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "rule(s) checked")
+		// both --at grants created a rule whose ONLY grantee is e2e.devs, so this
+		// revoke must take both rules with it rather than leave `by * break`
+		// shells behind (this suite used to accumulate two of them per run).
+		has(t, run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs"), "2 now-empty rule(s) dropped")
+		// revoke leaves the database exactly as it found it
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "no dead or empty rules")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})

@@ -1,6 +1,7 @@
 package acl
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -65,24 +66,97 @@ func TestRemoveGrantee(t *testing.T) {
 		`{4}to dn.subtree="ou=users,dc=example,dc=org" by self write by dn.exact="` + svc + `" read by * none`,
 		`{5}to dn.base="dc=example,dc=org" by * read`,
 	}
-	edits, removed := RemoveGrantee(values, DNWho(svc))
-	if removed != 1 {
-		t.Fatalf("removed = %d, want 1", removed)
+	bodies, removed, dropped := RemoveGrantee(values, DNWho(svc))
+	if removed != 1 || dropped != 0 {
+		t.Fatalf("removed = %d, dropped = %d, want 1/0", removed, dropped)
 	}
-	if len(edits) != 1 || edits[0].Delete != values[0] {
-		t.Fatalf("unexpected edits: %+v", edits)
+	want := []string{
+		`to dn.subtree="ou=users,dc=example,dc=org" by self write by * none`,
+		`to dn.base="dc=example,dc=org" by * read`, // untouched rules are carried over
 	}
-	want := `{4}to dn.subtree="ou=users,dc=example,dc=org" by self write by * none`
-	if edits[0].Add != want {
-		t.Errorf("Add = %q, want %q", edits[0].Add, want)
+	if !slices.Equal(bodies, want) {
+		t.Errorf("bodies = %q, want %q", bodies, want)
 	}
 }
 
+// A rule whose only clause was the revoked one must be dropped: slapd rejects a
+// rule with no `by` clause ("no by clause(s) specified in access line"), which
+// would fail the whole revoke.
+func TestRemoveGranteeDropsClauselessRule(t *testing.T) {
+	svc := `cn=probe,dc=example,dc=org`
+	values := []string{
+		`{0}to dn.subtree="ou=a,dc=example,dc=org" by dn.exact="` + svc + `" read`,
+		`{1}to * by * read`,
+	}
+	bodies, removed, dropped := RemoveGrantee(values, DNWho(svc))
+	if removed != 1 || dropped != 1 {
+		t.Fatalf("removed = %d, dropped = %d, want 1/1", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to * by * read`}) {
+		t.Errorf("bodies = %q", bodies)
+	}
+}
+
+// The `config acl grant` shape: revoking its only grantee leaves `by * break`,
+// which neither grants nor denies — drop it rather than leave the leftover
+// `acl lint` then flags.
+func TestRemoveGranteeDropsNoOpLeftover(t *testing.T) {
+	svc := `cn=probe,dc=example,dc=org`
+	values := []string{
+		`{0}to dn.base="ou=a,dc=example,dc=org" by dn.exact="` + svc + `" search by * break`,
+		`{1}to dn.subtree="ou=a,dc=example,dc=org" by dn.exact="` + svc + `" read by * break`,
+		`{2}to * by * read`,
+	}
+	bodies, removed, dropped := RemoveGrantee(values, DNWho(svc))
+	if removed != 2 || dropped != 2 {
+		t.Fatalf("removed = %d, dropped = %d, want 2/2", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to * by * read`}) {
+		t.Errorf("bodies = %q", bodies)
+	}
+}
+
+// `by * none` is a deliberate deny, not leftover noise: keep the rule, or
+// revoking a grantee would silently widen access to that subtree.
+func TestRemoveGranteeKeepsExplicitDeny(t *testing.T) {
+	svc := `cn=probe,dc=example,dc=org`
+	values := []string{`{0}to dn.subtree="ou=a,dc=example,dc=org" by dn.exact="` + svc + `" read by * none`}
+	bodies, removed, dropped := RemoveGrantee(values, DNWho(svc))
+	if removed != 1 || dropped != 0 {
+		t.Fatalf("removed = %d, dropped = %d, want 1/0", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to dn.subtree="ou=a,dc=example,dc=org" by * none`}) {
+		t.Errorf("bodies = %q", bodies)
+	}
+}
+
+// The returned list is what replaces olcAccess wholesale, so it must be ordered
+// by the current index — not by the order the server happened to return.
+func TestRemoveGranteeReturnsRulesInIndexOrder(t *testing.T) {
+	svc := `cn=probe,dc=example,dc=org`
+	values := []string{
+		`{2}to dn.base="c" by * read`,
+		`{0}to dn.base="a" by dn.exact="` + svc + `" read by * break`,
+		`{1}to dn.base="b" by * read`,
+	}
+	bodies, removed, dropped := RemoveGrantee(values, DNWho(svc))
+	if removed != 1 || dropped != 1 {
+		t.Fatalf("removed = %d, dropped = %d, want 1/1", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to dn.base="b" by * read`, `to dn.base="c" by * read`}) {
+		t.Errorf("bodies = %q, want b then c", bodies)
+	}
+}
+
+// No match must mean no write at all, not a rewrite of every rule.
 func TestRemoveGranteeNoMatch(t *testing.T) {
 	values := []string{`{0}to * by * read`}
-	edits, removed := RemoveGrantee(values, DNWho("cn=absent,dc=x"))
-	if removed != 0 || edits != nil {
-		t.Errorf("expected no edits, got %d / %+v", removed, edits)
+	bodies, removed, dropped := RemoveGrantee(values, DNWho("cn=absent,dc=x"))
+	if removed != 0 || dropped != 0 {
+		t.Errorf("expected no change, got removed=%d dropped=%d", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to * by * read`}) {
+		t.Errorf("bodies = %q", bodies)
 	}
 }
 
