@@ -1,6 +1,7 @@
 package ldapx
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -72,9 +73,13 @@ func (c *Client) LoadModule(file string) error {
 	return nil
 }
 
-// FindOverlay returns the overlay entry named name under dbDN, or nil when the
-// overlay is not configured there. The stored value carries an ordering prefix
-// ("{2}ppolicy"), so we match on the parsed name rather than filtering on it.
+// ErrNoSuchOverlay reports that a database has no such overlay configured —
+// an ordinary answer (it is what `enable` acts on), not a failure.
+var ErrNoSuchOverlay = errors.New("overlay not configured on this database")
+
+// FindOverlay returns the overlay entry named name under dbDN, or
+// ErrNoSuchOverlay. The stored value carries an ordering prefix ("{2}ppolicy"),
+// so we match on the parsed name rather than filtering on it.
 func (c *Client) FindOverlay(dbDN, name string) (*Entry, error) {
 	es, err := c.search(dbDN, ldap.ScopeSingleLevel, "(objectClass=olcOverlayConfig)",
 		[]string{"olcOverlay", "olcDisabled", "objectClass"}, 0)
@@ -86,7 +91,7 @@ func (c *Client) FindOverlay(dbDN, name string) (*Entry, error) {
 			return e, nil
 		}
 	}
-	return nil, nil
+	return nil, fmt.Errorf("%s: %w", name, ErrNoSuchOverlay)
 }
 
 // OverlayState is what EnableOverlay/DisableOverlay did.
@@ -106,10 +111,10 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 
 	// already configured? then this is at most an olcDisabled flip.
 	e, err := c.FindOverlay(dbDN, name)
-	if err != nil {
+	switch {
+	case err != nil && !errors.Is(err, ErrNoSuchOverlay):
 		return st, err
-	}
-	if e != nil {
+	case err == nil:
 		st.DN = e.DN
 		if !strings.EqualFold(e.Get("olcDisabled"), "TRUE") {
 			st.Action = "unchanged"
@@ -117,8 +122,8 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 		}
 		// FALSE rather than a delete: the attribute is what the server reports,
 		// and setting it keeps the overlay's settings intact either way.
-		if err := c.Modify(e.DN, []Mod{{Op: ModReplace, Name: "olcDisabled", Values: []string{"FALSE"}}}); err != nil {
-			return st, fmt.Errorf("re-enable overlay %s: %w", name, err)
+		if merr := c.Modify(e.DN, []Mod{{Op: ModReplace, Name: "olcDisabled", Values: []string{"FALSE"}}}); merr != nil {
+			return st, fmt.Errorf("re-enable overlay %s: %w", name, merr)
 		}
 		st.Action = "re-enabled"
 		return st, nil
@@ -130,8 +135,8 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 	}
 	if class == "" && loadModule {
 		mod := overlay.Module(name)
-		if err := c.LoadModule(mod); err != nil {
-			return st, err
+		if lerr := c.LoadModule(mod); lerr != nil {
+			return st, lerr
 		}
 		st.Module = mod
 		if class, _, err = c.OverlayConfigClass(name); err != nil {
@@ -154,11 +159,11 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 
 	// the RDN goes in unindexed; slapd assigns the {N} and renames the entry.
 	dn := fmt.Sprintf("olcOverlay=%s,%s", name, dbDN)
-	if err := c.AddEntry(dn, attrs); err != nil {
-		return st, fmt.Errorf("enable overlay %s on %s: %w", name, dbDN, err)
+	if aerr := c.AddEntry(dn, attrs); aerr != nil {
+		return st, fmt.Errorf("enable overlay %s on %s: %w", name, dbDN, aerr)
 	}
-	if e, ferr := c.FindOverlay(dbDN, name); ferr == nil && e != nil {
-		dn = e.DN // report the indexed DN the server settled on
+	if added, ferr := c.FindOverlay(dbDN, name); ferr == nil {
+		dn = added.DN // report the indexed DN the server settled on
 	}
 	st.DN, st.Action = dn, "created"
 	return st, nil
@@ -170,16 +175,16 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 // deletes the entry and the settings with it.
 func (c *Client) DisableOverlay(dbDN, name string, purge bool) (OverlayState, error) {
 	e, err := c.FindOverlay(dbDN, name)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrNoSuchOverlay):
+		return OverlayState{Action: "unchanged"}, nil // nothing to disable
+	case err != nil:
 		return OverlayState{}, err
-	}
-	if e == nil {
-		return OverlayState{Action: "unchanged"}, nil
 	}
 	st := OverlayState{DN: e.DN}
 	if purge {
-		if err := c.Delete(e.DN); err != nil {
-			return st, fmt.Errorf("delete overlay %s: %w", name, err)
+		if derr := c.Delete(e.DN); derr != nil {
+			return st, fmt.Errorf("delete overlay %s: %w", name, derr)
 		}
 		st.Action = "deleted"
 		return st, nil
@@ -188,8 +193,8 @@ func (c *Client) DisableOverlay(dbDN, name string, purge bool) (OverlayState, er
 		st.Action = "unchanged"
 		return st, nil
 	}
-	if err := c.Modify(e.DN, []Mod{{Op: ModReplace, Name: "olcDisabled", Values: []string{"TRUE"}}}); err != nil {
-		return st, fmt.Errorf("disable overlay %s: %w", name, err)
+	if merr := c.Modify(e.DN, []Mod{{Op: ModReplace, Name: "olcDisabled", Values: []string{"TRUE"}}}); merr != nil {
+		return st, fmt.Errorf("disable overlay %s: %w", name, merr)
 	}
 	st.Action = "disabled"
 	return st, nil

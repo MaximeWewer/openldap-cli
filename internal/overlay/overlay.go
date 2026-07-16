@@ -14,7 +14,7 @@
 // Rather than hard-code a name->class table that would drift with the server
 // version and build options, we read the classes back from the server: every
 // overlay config class is declared `SUP olcOverlayConfig`, so the live schema
-// IS the catalogue. Its presence also doubles as the "is the module loaded?"
+// IS the catalog. Its presence also doubles as the "is the module loaded?"
 // probe, since a module registers its schema when it loads.
 package overlay
 

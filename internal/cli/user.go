@@ -119,8 +119,8 @@ var userAddCmd = &cobra.Command{
 
 		var posix *domain.Posix
 		if userAddPosix {
-			if err := requirePosixSchema(cli); err != nil {
-				return err
+			if serr := requirePosixSchema(cli); serr != nil {
+				return serr
 			}
 			uidNum := userAddUIDNumber
 			if uidNum == 0 {
