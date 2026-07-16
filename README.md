@@ -41,7 +41,7 @@ dependencies (amd64 + arm64 each; verify against `checksums.txt`):
 Or build it:
 
 ```bash
-make build      # -> ./openldap-cli   (static, stripped; Go 1.26+)
+make build      # -> ./openldap-cli   (static, stripped; Go 1.26.5+)
 make install    # -> $GOBIN/openldap-cli
 ```
 
