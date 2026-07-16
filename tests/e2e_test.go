@@ -169,7 +169,7 @@ func TestCLI(t *testing.T) {
 		// silently grants nothing.
 		db := "olcDatabase={1}mdb,cn=config"
 		run(t, admin, adPW, "config", "acl", "grant", db, "ou=service-accounts,dc=example,dc=org",
-			"--group", "e2e.devs", "--access", "read", "--at", "2")
+			"--group", "e2e.devs", "--access", "read")
 		run(t, admin, adPW, "group", "rename", "e2e.devs", "e2e.eng")
 		has(t, run(t, admin, adPW, "config", "acl", "list", db), `group.exact="cn=e2e.eng,ou=groups,dc=example,dc=org"`)
 		if strings.Contains(run(t, admin, adPW, "config", "acl", "list", db), "cn=e2e.devs,ou=groups") {
@@ -284,12 +284,15 @@ func TestCLI(t *testing.T) {
 		// `by` clause to it: revoking leaves the rule's other clauses standing
 		has(t, run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs"), "revoked 1 clause")
 		// the "app must search a tree and read only some entries" pattern:
-		// base-scope container grant + filtered read grant, both placed by --at
+		// base-scope container grant + filtered read grant. Neither passes --at:
+		// a NEW rule must land above the broad ou=users rule that would shadow it,
+		// or the grant would be dead on arrival (lint asserts this below).
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org",
-			"--group", "e2e.devs", "--access", "search", "--scope", "base", "--at", "4"), `to dn.base="ou=users`)
+			"--group", "e2e.devs", "--access", "search", "--scope", "base"), `to dn.base="ou=users`)
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org",
-			"--group", "e2e.devs", "--access", "read", "--at", "5",
+			"--group", "e2e.devs", "--access", "read",
 			"--filter", "(memberOf=cn=e2e.devs,ou=groups,dc=example,dc=org)"), "filter=(memberOf=cn=e2e.devs")
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "no dead or empty rules")
 		// both --at grants created a rule whose ONLY grantee is e2e.devs, so this
 		// revoke must take both rules with it rather than leave `by * break`
 		// shells behind (this suite used to accumulate two of them per run).

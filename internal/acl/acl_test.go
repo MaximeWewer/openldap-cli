@@ -60,6 +60,24 @@ func TestInjectAppendsWhenMissing(t *testing.T) {
 	}
 }
 
+func TestRuleIndex(t *testing.T) {
+	values := []string{
+		`{0}to * by * read`,
+		`{5}to dn.subtree="ou=users,dc=example,dc=org" by * none`,
+		`{6}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=x) by * read`,
+	}
+	// the selector must match exactly — the filtered rule is a different one
+	if got := RuleIndex(values, InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "subtree"}); got != 5 {
+		t.Errorf("RuleIndex(unfiltered) = %d, want 5", got)
+	}
+	if got := RuleIndex(values, InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "subtree", Filter: "(memberOf=cn=g,dc=x)"}); got != 6 {
+		t.Errorf("RuleIndex(filtered) = %d, want 6", got)
+	}
+	if got := RuleIndex(values, InjectOpts{Target: "ou=absent,dc=example,dc=org", Scope: "subtree"}); got != -1 {
+		t.Errorf("RuleIndex(absent) = %d, want -1", got)
+	}
+}
+
 func TestRemoveGrantee(t *testing.T) {
 	svc := `cn=svc,ou=service-accounts,dc=example,dc=org`
 	values := []string{

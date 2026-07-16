@@ -479,6 +479,28 @@ func aclWho(group, dn string) (string, error) {
 	return acl.GroupWho(g), nil
 }
 
+// warnIfGrantUnreachable checks, after the write, that the rule carrying the new
+// clause is one slapd can actually reach.
+//
+// Placement fixes the rule we create; it cannot fix a clause added to an
+// EXISTING rule that a broader one already shadows, nor an --at the caller got
+// wrong. Both grant nothing, silently — so re-read and say so rather than let
+// `granted` stand for a rule that never fires.
+func warnIfGrantUnreachable(cc *ldapx.Client, db string, o acl.InjectOpts) {
+	e, err := cc.ReadEntry(db, []string{"olcAccess"})
+	if err != nil {
+		return // the grant succeeded; a failed re-read is not worth an error
+	}
+	values := e.GetAll("olcAccess")
+	at := acl.RuleIndex(values, o)
+	shadow := acl.ShadowIndex(values, o)
+	if at < 0 || shadow < 0 || at <= shadow {
+		return
+	}
+	log.Warn().Int("rule", at).Int("shadowed_by", shadow).
+		Msg("the clause landed in a rule that an earlier one shadows, so it grants nothing — `config acl lint` explains it; `config acl move` raises it")
+}
+
 var configACLGrantCmd = &cobra.Command{
 	Use:   "grant <database-dn> <subtree> --access <a> (--group <g> | --dn <d>)",
 	Short: "Add a `by <who> <access>` clause to the rule protecting <subtree>",
@@ -486,17 +508,22 @@ var configACLGrantCmd = &cobra.Command{
 		"right) or a single DN (--dn). The clause is inserted into the EXISTING rule\n" +
 		"with the same selector, so multiple grantees coexist; a second rule with the\n" +
 		"same `to` would be dead.\n\n" +
+		"A NEW rule is placed ABOVE the rule that would otherwise shadow it, because\n" +
+		"slapd stops at the first rule whose `to` matches: appended at the end, under\n" +
+		"a broader rule that never breaks, it would grant nothing. --at overrides the\n" +
+		"placement; either way the result is checked and a grant that cannot fire is\n" +
+		"reported.\n\n" +
 		"An app that must SEARCH a tree usually needs two grants: --scope base on the\n" +
 		"container (to base/traverse the search) and a subtree grant to read entries,\n" +
-		"optionally narrowed with --filter for least privilege. Use --at to place a\n" +
-		"new rule ABOVE the broader rule that would otherwise shadow it.",
+		"optionally narrowed with --filter for least privilege — or just use\n" +
+		"`svc grant`, which emits both.",
 	Args: cobra.ExactArgs(2),
 	Example: "  # let an app search ou=users and read ONLY members of a group\n" +
 		"  openldap-cli config acl grant <db> 'ou=users,dc=example,dc=org' \\\n" +
-		"      --dn 'cn=app,ou=service-accounts,dc=example,dc=org' --access search --scope base --at 6\n" +
+		"      --dn 'cn=app,ou=service-accounts,dc=example,dc=org' --access search --scope base\n" +
 		"  openldap-cli config acl grant <db> 'ou=users,dc=example,dc=org' \\\n" +
 		"      --dn 'cn=app,ou=service-accounts,dc=example,dc=org' --access read \\\n" +
-		"      --filter '(memberOf=cn=admins,ou=groups,dc=example,dc=org)' --at 7",
+		"      --filter '(memberOf=cn=admins,ou=groups,dc=example,dc=org)'",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		db, target := strings.TrimSpace(args[0]), strings.TrimSpace(args[1])
 		if !validAccess(aclGrantAccess) {
@@ -525,22 +552,42 @@ var configACLGrantCmd = &cobra.Command{
 			return err
 		}
 		defer cc.Close()
-		rule, appended, err := cc.InjectAccess(db, acl.InjectOpts{
+
+		opts := acl.InjectOpts{
 			Target: target, Scope: scope, Filter: strings.TrimSpace(aclGrantFilter),
 			Who: who, Access: aclGrantAccess, Terminator: aclGrantTerm, At: aclGrantAt,
-		})
+		}
+		before, err := cc.ReadEntry(db, []string{"olcAccess"})
+		if err != nil {
+			return err
+		}
+		// Appending a NEW rule at the end grants nothing when a broader rule above
+		// already matches the target and never breaks: slapd stops at that one. So
+		// place it above the rule that would shadow it (-1: nothing does, append at
+		// the end). --at overrides, for a placement we cannot infer.
+		shadow := acl.ShadowIndex(before.GetAll("olcAccess"), opts)
+		if !cmd.Flags().Changed("at") {
+			opts.At = shadow
+		}
+
+		rule, appended, err := cc.InjectAccess(db, opts)
 		if err != nil {
 			return fmt.Errorf("grant on %s: %w", db, err)
 		}
-		log.Debug().Str("db", db).Str("who", who).Bool("new_rule", appended).Msg("olcAccess grant")
+		log.Debug().Str("db", db).Str("who", who).Bool("new_rule", appended).Int("at", opts.At).Msg("olcAccess grant")
 		if rule == "" {
 			return out.Emit(okResult{Action: "already granted (no change) to " + who + " on", DN: db})
 		}
-		res := okResult{Action: "granted " + aclGrantAccess + " to " + who + " on", DN: db, Detail: rule}
-		if appended && aclGrantAt < 0 {
-			res.Detail = rule + "\n  (new rule appended at the end — place it with --at, or move it with `config acl move`, so a broader rule above doesn't shadow it)"
+		if appended && opts.At >= 0 && !cmd.Flags().Changed("at") {
+			log.Info().Int("at", opts.At).Msg("new rule placed above the rule that would have shadowed it")
+			if aclGrantTerm == "none" {
+				log.Warn().Int("at", opts.At).Msg("this rule ends in `by * none` and now sits above a broader one: every other identity that rule served loses access on these entries (rootDN excepted) — use --terminator break to stay additive")
+			}
 		}
-		return out.Emit(res)
+		// The clause can also land in an EXISTING rule that is itself shadowed, or
+		// at an --at the caller chose: placement alone does not prove reachability.
+		warnIfGrantUnreachable(cc, db, opts)
+		return out.Emit(okResult{Action: "granted " + aclGrantAccess + " to " + who + " on", DN: db, Detail: rule})
 	},
 }
 
@@ -635,7 +682,7 @@ func init() {
 	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")
 	configACLGrantCmd.Flags().StringVar(&aclGrantScope, "scope", "sub", "rule scope: sub (the tree) or base (the container entry only, to traverse/search)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantFilter, "filter", "", "narrow the rule to entries matching this LDAP filter, e.g. '(memberOf=cn=g,dc=x)'")
-	configACLGrantCmd.Flags().IntVar(&aclGrantAt, "at", -1, "index to insert a NEW rule at (default -1: append at the end)")
+	configACLGrantCmd.Flags().IntVar(&aclGrantAt, "at", -1, "index to insert a NEW rule at (default: auto — above the rule that would shadow it)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantTerm, "terminator", "break", "trailing `by *` of a NEW rule: break (additive) or none (blocks others)")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeGroup, "group", "", "the group (name or DN) to revoke")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeDN, "dn", "", "the exact DN to revoke")

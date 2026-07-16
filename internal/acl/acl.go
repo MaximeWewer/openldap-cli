@@ -128,6 +128,27 @@ func (o InjectOpts) selector() string {
 // (before its trailing `by *` clause), or returns a new rule when none matches.
 // Adding a `by` clause to the SAME rule — rather than a second rule with the
 // same `to`, which would be dead — is what lets multiple grantees coexist.
+// matchesSelector reports whether a rule body's `to …` part is exactly o's.
+// The match must be exact: what follows has to be the first `by`, not a further
+// qualifier (e.g. a filter= we did not ask for).
+func matchesSelector(body string, o InjectOpts) bool {
+	rest, ok := strings.CutPrefix(body, o.selector())
+	return ok && strings.HasPrefix(strings.TrimSpace(rest), "by ")
+}
+
+// RuleIndex returns the {N} index of the rule whose selector is exactly o's, or
+// -1 when no rule protects that target. Callers use it to tell where a grant
+// actually landed, which decides whether it is reachable.
+func RuleIndex(values []string, o InjectOpts) int {
+	for _, v := range values {
+		idx, body := SplitIndexed(v)
+		if matchesSelector(strings.TrimSpace(body), o) {
+			return idx
+		}
+	}
+	return -1
+}
+
 func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 	sel := o.selector()
 	clause := fmt.Sprintf("by %s %s", o.Who, o.Access)
@@ -135,10 +156,7 @@ func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 	for _, v := range values {
 		idx, body := SplitIndexed(v)
 		body = strings.TrimSpace(body)
-		rest, ok := strings.CutPrefix(body, sel)
-		// the selector must match exactly: what follows is the first `by`, not
-		// a further qualifier (e.g. a filter= we did not ask for).
-		if !ok || !strings.HasPrefix(strings.TrimSpace(rest), "by ") {
+		if !matchesSelector(body, o) {
 			continue
 		}
 		// already granted -> no change (keeps re-runs idempotent)

@@ -263,7 +263,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config overlay disable <name> [--db <dn>] [--purge]`                          | set `olcDisabled: TRUE` — stops the overlay live but **keeps its settings**, so `enable` restores them. `--purge` deletes the entry and its settings instead. The module stays loaded either way (slapd refuses to unload one) |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
 | `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
-| `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); `--at` places a new rule **above** the broad rule that would shadow it; new rules end in `by * break` (additive) |
+| `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); new rules end in `by * break` (additive) and are **auto-placed above the rule that would shadow them** — `--at N` overrides, and a grant that still cannot fire is reported |
 | `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one — slapd rejects a clauseless rule, which used to fail the whole revoke — or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access |
 | `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
 | `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)                                                        |
@@ -319,12 +319,15 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 - **`olcAccess` order matters — and the trap when reordering.** Rules are
   evaluated by index and evaluation **stops at the first matching `to` target**,
   so a specific rule below a broad one never fires (a classic cause of a
-  `noSuchObject`/code 32 where the base entry's `disclose` was denied). Use
-  `config acl move` to raise it — and **`config acl lint` finds these for you**
-  (it reports every rule an earlier one shadows). **But** raising a narrow rule
-  that ends in `by * none` blocks every identity the broader rule served on that
-  entry (rootDN excepted) — give it a `by * break` (or the needed `by …`
-  clauses) first, editing the rule with `config set`.
+  `noSuchObject`/code 32 where the base entry's `disclose` was denied). You do
+  not have to place rules yourself: `config acl grant` and `svc grant` insert a
+  new rule **above** the one that would shadow it, and report a grant that still
+  cannot fire. For rules written by other means, **`config acl lint` finds them**
+  and `config acl move` raises them. **But** raising a narrow rule that ends in
+  `by * none` blocks every identity the broader rule served on that entry (rootDN
+  excepted) — give it a `by * break` (or the needed `by …` clauses) first,
+  editing the rule with `config set`. `config acl grant --terminator none` warns
+  when it does this.
 - **Several accounts, same tree → one rule (or a group), not two rules.**
   Evaluation stops at the first rule whose `to` matches, so a **second rule with
   the same `to`** is dead — the first grantee works, the rest silently don't.
@@ -506,8 +509,8 @@ The container access follows `--access`: `search` for a read grant, **`write` fo
 filter before it exists, so **creating** entries needs an unfiltered grant.
 
 Re-running is a no-op, so it is safe in a provisioning script. Prefer it over
-hand-writing `olcAccess`; drop to `config acl grant --scope/--filter/--at` only
-when you need a shape it does not cover.
+hand-writing `olcAccess`; drop to `config acl grant --scope/--filter` only when
+you need a shape it does not cover.
 
 ### Password policies (writes need the rootDN)
 
