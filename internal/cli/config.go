@@ -243,6 +243,67 @@ var configACLMoveCmd = &cobra.Command{
 	},
 }
 
+// ---- lint (dead / empty olcAccess rules) --------------------------------
+
+type aclFinding struct {
+	Index   int    `json:"index" yaml:"index"`
+	Level   string `json:"level" yaml:"level"`
+	Message string `json:"message" yaml:"message"`
+	Rule    string `json:"rule" yaml:"rule"`
+}
+
+type aclLintResult struct {
+	DN       string       `json:"dn" yaml:"dn"`
+	Checked  int          `json:"checked" yaml:"checked"`
+	Findings []aclFinding `json:"findings" yaml:"findings"`
+}
+
+func (r aclLintResult) Text() string {
+	if len(r.Findings) == 0 {
+		return fmt.Sprintf("%d rule(s) checked on %s — no dead or empty rules", r.Checked, r.DN)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d rule(s) checked on %s — %d finding(s)\n", r.Checked, r.DN, len(r.Findings))
+	for _, f := range r.Findings {
+		rule := f.Rule
+		if len(rule) > 90 {
+			rule = rule[:90] + "…"
+		}
+		fmt.Fprintf(&b, "  [%s] {%d} %s\n        %s\n", f.Level, f.Index, f.Message, rule)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+var configACLLintCmd = &cobra.Command{
+	Use:   "lint <database-dn>",
+	Short: "Report olcAccess rules that can never fire (shadowed) or grant nothing",
+	Long: "slapd stops at the FIRST rule whose `to` matches, so a specific rule placed\n" +
+		"below a broader one never fires: the grant looks present but has no effect\n" +
+		"(and clients see noSuchObject when disclose is denied). Fix a dead rule by\n" +
+		"raising it with `config acl move`, or give the shadowing rule a `by * break`.",
+	Args:    cobra.ExactArgs(1),
+	Example: "  openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		dn := strings.TrimSpace(args[0])
+		e, err := cc.ReadEntry(dn, []string{"olcAccess"})
+		if err != nil {
+			return err
+		}
+		rules := e.GetAll("olcAccess")
+		res := aclLintResult{DN: dn, Checked: len(rules)}
+		for _, f := range acl.Lint(rules) {
+			res.Findings = append(res.Findings, aclFinding{Index: f.Index, Level: f.Level, Message: f.Message, Rule: f.Rule})
+		}
+		log.Debug().Str("db", dn).Int("findings", len(res.Findings)).Msg("olcAccess lint")
+		return out.Emit(res)
+	},
+}
+
 // ---- grant / revoke (olcAccess by-clause on a subtree) ------------------
 
 var (
@@ -440,7 +501,7 @@ func init() {
 	configACLGrantCmd.Flags().StringVar(&aclGrantTerm, "terminator", "break", "trailing `by *` of a NEW rule: break (additive) or none (blocks others)")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeGroup, "group", "", "the group (name or DN) to revoke")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeDN, "dn", "", "the exact DN to revoke")
-	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd)
+	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd, configACLLintCmd)
 	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)
 	rootCmd.AddCommand(configCmd)
 }

@@ -218,6 +218,7 @@ func TestCLI(t *testing.T) {
 			"--group", "e2e.devs", "--access", "read", "--at", "5",
 			"--filter", "(memberOf=cn=e2e.devs,ou=groups,dc=example,dc=org)"), "filter=(memberOf=cn=e2e.devs")
 		run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "e2e.devs")
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "rule(s) checked")
 		run(t, root, rtPW, "config", "limits", "set", "--size", "2000")
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})
