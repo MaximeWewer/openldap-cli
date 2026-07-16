@@ -433,6 +433,8 @@ openldap-cli users delete --filter '(title=Intern)' --yes
 openldap-cli users export > users.csv
 openldap-cli users export --ldif > users.ldif
 openldap-cli import-ldif users.ldif
+openldap-cli groups delete old.team another.team          # bulk delete groups by name
+openldap-cli svcs delete legacy.agent                     # entry only (ACL cleanup: singular `svc delete`)
 ```
 
 ### Service accounts (entry + cn=config ACL)
@@ -483,6 +485,7 @@ openldap-cli ppolicy list
 openldap-cli ppolicy show strict
 openldap-cli ppolicy assign toto.titi strict                 # override the default policy
 openldap-cli ppolicy assign toto.titi --clear                # back to default
+openldap-cli --profile prod-root ppolicy delete strict       # needs the rootDN too
 ```
 
 ### Config & schema
@@ -502,6 +505,10 @@ openldap-cli --profile prod-root config limits set --size 5000                  
 
 openldap-cli schema list-classes
 openldap-cli schema show inetOrgPerson
+
+# generic cn=config writer (the escape hatch for any olc* attribute)
+openldap-cli --profile prod-root config set 'olcOverlay={4}accesslog,olcDatabase={1}mdb,cn=config' olcAccessLogSuccess TRUE
+openldap-cli schema list-attrs | grep -i mail
 ```
 
 ### Any DN (the `entry` escape hatch)
@@ -529,6 +536,8 @@ openldap-cli search '(mail=*@example.org)' --attrs uid,mail
 openldap-cli search '(uid=toto.titi)' --operational         # + entryUUID, pwdChangedTime, …
 openldap-cli search '(objectClass=olcModuleList)' --base cn=config --config-bind
 openldap-cli -o json search '(&(objectClass=inetOrgPerson)(title=SRE))' | jq -r '.entries[].dn'
+openldap-cli ops accesslog-purge --keep-days 30 --dry-run   # count first, then drop --dry-run
+openldap-cli ops replication                                # local contextCSN (drift check is HA-only)
 ```
 
 ### Backup & restore (no docker/alpine — just the CLI)
