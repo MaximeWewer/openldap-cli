@@ -65,6 +65,34 @@ var (
 	userAddSet        []string
 )
 
+// requirePosixSchema fails early when the server has no posixAccount.
+//
+// posixAccount and its attributes ship with the `nis` schema, which OpenLDAP
+// does not load by default. Without it, --posix fails on whichever piece slapd
+// checks first — observed: `Undefined Attribute Type: homeDirectory: attribute
+// type undefined` — naming a symptom rather than the missing schema. We probe
+// the objectClass because that is what --posix is really asking for; nis is
+// all-or-nothing, so its presence stands for the attributes too.
+//
+// Unlike an overlay module, slapd has no way to load a schema by name (it even
+// refuses to delete one at runtime), so this can only be reported, not repaired.
+//
+// A schema we cannot read is not treated as missing — that would block --posix
+// on a server that supports it perfectly well.
+func requirePosixSchema(cli *ldapx.Client) error {
+	ok, err := cli.HasObjectClass("posixAccount")
+	if err != nil {
+		log.Debug().Err(err).Msg("could not read the subschema to check for posixAccount")
+		return nil
+	}
+	if !ok {
+		return fmt.Errorf("--posix needs the objectClass posixAccount, which this server's schema does not have: " +
+			"load the `nis` schema (it ships with OpenLDAP as schema/nis.ldif) and retry — " +
+			"`schema list-classes` shows what the server knows")
+	}
+	return nil
+}
+
 var userAddCmd = &cobra.Command{
 	Use:   "add <login>",
 	Short: "Create a user (firstname.lastname derives names; a plain login also works)",
@@ -91,6 +119,9 @@ var userAddCmd = &cobra.Command{
 
 		var posix *domain.Posix
 		if userAddPosix {
+			if err := requirePosixSchema(cli); err != nil {
+				return err
+			}
 			uidNum := userAddUIDNumber
 			if uidNum == 0 {
 				if uidNum, err = nextUIDNumber(cli); err != nil {

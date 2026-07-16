@@ -13,6 +13,33 @@ import (
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
+// The subschema read behind `user add --posix`'s pre-flight check: it must see
+// what the server has AND report what it lacks, using the plain data bind (no
+// config bind — a `user add` must not need one).
+func TestObjectClassNames(t *testing.T) {
+	c := dataClient(t)
+	defer c.Close()
+
+	set, err := c.ObjectClassNames()
+	if err != nil {
+		t.Fatalf("ObjectClassNames: %v", err)
+	}
+	// always present (core/inetorgperson), and case-insensitive
+	for _, n := range []string{"inetorgperson", "InetOrgPerson", "top"} {
+		if !set[strings.ToLower(n)] {
+			t.Errorf("ObjectClassNames() missing %q", n)
+		}
+	}
+	// tests/ loads the nis schema, so --posix is supported here
+	if ok, err := c.HasObjectClass("posixAccount"); err != nil || !ok {
+		t.Errorf("HasObjectClass(posixAccount) = %v, %v; want true (tests/ loads the nis schema)", ok, err)
+	}
+	// and absence is detected, which is what turns into the --posix error
+	if ok, err := c.HasObjectClass("noSuchObjectClassAnywhere"); err != nil || ok {
+		t.Errorf("HasObjectClass(bogus) = %v, %v; want false", ok, err)
+	}
+}
+
 func dataClient(t *testing.T) *ldapx.Client {
 	t.Helper()
 	c, err := ldapx.Connect(&config.Profile{

@@ -170,7 +170,7 @@ cover. Uses the data bind; `--config-bind` targets `cn=config`.
 
 | Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                                                 |
 | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes — unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber (needs `nis` schema) |
+| `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes — unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber; it needs the `nis` schema and **checks for it first**, naming it instead of failing on `Undefined Attribute Type` |
 | `user delete <login>`                                                                                                | refint auto-purges group memberships                                                                                                                                                                                                                                                                                                                  |
 | `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy                                                                                                                                                                                                                                                                                        |
 | `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                                       |
@@ -315,7 +315,13 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   data admin. Recover via a rootDN profile (`user unlock <admin>`).
 - **`ppolicy set` / OUs under the base / `svc` ACLs** require the rootDN — your
   `ou=users` admin has write only inside specific subtrees.
-- **`--posix`** needs the `nis` schema loaded server-side.
+- **`--posix` needs the `nis` schema loaded server-side** — and says so. Without
+  it, `posixAccount` and its attributes do not exist, and slapd rejects the add
+  on whichever piece it checks first (`Undefined Attribute Type: homeDirectory`),
+  naming a symptom rather than the missing schema. `user add --posix` checks the
+  server's schema first and names `nis` instead. It can only report it: unlike an
+  overlay module, slapd cannot load a schema by name (it will not even delete one
+  at runtime), so load `schema/nis.ldif` server-side.
 - **`olcAccess` order matters — and the trap when reordering.** Rules are
   evaluated by index and evaluation **stops at the first matching `to` target**,
   so a specific rule below a broad one never fires (a classic cause of a
