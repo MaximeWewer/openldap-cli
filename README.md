@@ -262,7 +262,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config overlay enable <name> [--db <dn>] [--no-module]`                       | enable an overlay (memberof, refint, ppolicy, accesslog, unique, …) on the database holding `base_dn`; **loads its module first** if the schema is missing, and resolves its config `objectClass` from the server's schema. Idempotent; re-enables one turned off by `disable`. `--no-module` fails instead of loading |
 | `config overlay disable <name> [--db <dn>] [--purge]`                          | set `olcDisabled: TRUE` — stops the overlay live but **keeps its settings**, so `enable` restores them. `--purge` deletes the entry and its settings instead. The module stays loaded either way (slapd refuses to unload one) |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
-| `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
+| `config acl move <database-dn> <from> <to> [--force]`                          | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it. **Refused** when the move would silently change access: it names the clauses that would stop applying, or the rule that would become unreachable; `--force` applies it anyway |
 | `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); new rules end in `by * break` (additive) and are **auto-placed above the rule that would shadow them** — `--at N` overrides, and a grant that still cannot fire is reported |
 | `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one — slapd rejects a clauseless rule, which used to fail the whole revoke — or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access |
 | `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
@@ -323,11 +323,17 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   not have to place rules yourself: `config acl grant` and `svc grant` insert a
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
-  and `config acl move` raises them. **But** raising a narrow rule that ends in
-  `by * none` blocks every identity the broader rule served on that entry (rootDN
-  excepted) — give it a `by * break` (or the needed `by …` clauses) first,
-  editing the rule with `config set`. `config acl grant --terminator none` warns
-  when it does this.
+  and `config acl move` raises them.
+- **Reordering decides who answers — `config acl move` refuses to do that
+  silently.** Raising a rule that does not end in `by * break` above a broader one
+  takes the broader rule's grantees off the entries it covers (rootDN excepted):
+  they lose the access with no error, seeing `noSuchObject`. **`lint` cannot catch
+  this** — nothing became unreachable, the broader rule still answers everywhere
+  else. So the move is checked first and refused, naming the exact clauses that
+  would stop applying (a downgrade, e.g. `write` → `read`, counts). Give the rule
+  a `by * break` first (`config set`) and the same move is allowed and additive;
+  `--force` applies it as-is. Moving a rule *under* a broader one is refused the
+  same way, since it would become unreachable.
 - **Several accounts, same tree → one rule (or a group), not two rules.**
   Evaluation stops at the first rule whose `to` matches, so a **second rule with
   the same `to`** is dead — the first grantee works, the rest silently don't.

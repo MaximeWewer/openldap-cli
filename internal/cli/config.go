@@ -324,6 +324,30 @@ var configACLListCmd = &cobra.Command{
 	},
 }
 
+var aclMoveForce bool
+
+// moveRefusal spells out what a move would change, so the operator can decide
+// rather than discover it from a ticket weeks later.
+func moveRefusal(from, to int, m acl.MoveImpact) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "moving {%d} to {%d} would silently change access:\n", from, to)
+	fmt.Fprintf(&b, "\n  the rule being moved:\n    %s\n", m.Moved)
+	if len(m.Lost) > 0 {
+		fmt.Fprintf(&b, "\n  it does not end in `by * break`, so on the entries it covers it now\n"+
+			"  answers instead of this rule:\n    %s\n", m.Decided)
+		b.WriteString("\n  these clauses stop applying there (their identities lose that access,\n" +
+			"  and see noSuchObject rather than an error):\n")
+		for _, c := range m.Lost {
+			fmt.Fprintf(&b, "    %s\n", c)
+		}
+		b.WriteString("\n  to keep them, add `by * break` to the moved rule (`config set`) first.\n")
+	}
+	for _, f := range m.Dead {
+		fmt.Fprintf(&b, "\n  this rule becomes unreachable, granting nothing:\n    {%d} %s\n    %s\n", f.Index, f.Rule, f.Message)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 var configACLMoveCmd = &cobra.Command{
 	Use:   "move <database-dn> <from> <to>",
 	Short: "Reorder an olcAccess rule (move rule {from} to position {to})",
@@ -331,10 +355,14 @@ var configACLMoveCmd = &cobra.Command{
 		"`to` target matches, so a specific rule placed below a broad one never\n" +
 		"fires. This moves rule {from} to position {to} and renumbers the rest in\n" +
 		"one atomic replace.\n\n" +
-		"CAUTION: raising a narrow rule that ends in `by * none` above a broader\n" +
-		"rule will block every identity the broader rule used to serve on that\n" +
-		"entry (rootDN excepted). Give the narrow rule a `by * break` (or the\n" +
-		"needed `by ... ` clauses) first — edit it with `config set` if so.",
+		"Reordering decides WHICH rule answers for an entry, so the move is checked\n" +
+		"first and refused when it would silently change access: raising a rule that\n" +
+		"does not end in `by * break` above a broader one takes that rule's grantees\n" +
+		"off the entries covered (they get no error — just noSuchObject), and moving\n" +
+		"a rule under a broader one makes it unreachable. The refusal names exactly\n" +
+		"which clauses stop applying; --force does it anyway.\n\n" +
+		"To raise a rule without taking anyone's access, give it a `by * break` (or\n" +
+		"the needed `by …` clauses) first — edit it with `config set`.",
 	Args: cobra.ExactArgs(3),
 	Example: "  # raise a specific rule above the broad ou=groups rule that shadows it\n" +
 		"  openldap-cli config acl move 'olcDatabase={1}mdb,cn=config' 8 5",
@@ -357,9 +385,15 @@ var configACLMoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		reordered, err := acl.Reorder(e.GetAll("olcAccess"), from, to)
+		reordered, impact, err := acl.InspectMove(e.GetAll("olcAccess"), from, to)
 		if err != nil {
 			return err
+		}
+		if !impact.Empty() && !aclMoveForce {
+			return fmt.Errorf("%s\n\nre-run with --force to do it anyway", moveRefusal(from, to, impact))
+		}
+		if !impact.Empty() {
+			log.Warn().Int("from", from).Int("to", to).Msg("--force: applying a move that changes access\n" + moveRefusal(from, to, impact))
 		}
 		if err := cc.Modify(dn, []ldapx.Mod{{Op: ldapx.ModReplace, Name: "olcAccess", Values: reordered}}); err != nil {
 			return fmt.Errorf("reorder olcAccess on %s: %w", dn, err)
@@ -677,6 +711,7 @@ func init() {
 	configOverlayEnableCmd.Flags().BoolVar(&overlayNoModule, "no-module", false, "fail instead of loading the overlay's module when its schema is missing")
 	configOverlayDisableCmd.Flags().BoolVar(&overlayPurge, "purge", false, "delete the overlay entry and its settings instead of just deactivating it")
 	configOverlayCmd.AddCommand(configOverlayListCmd, configOverlayEnableCmd, configOverlayDisableCmd)
+	configACLMoveCmd.Flags().BoolVar(&aclMoveForce, "force", false, "apply the move even if it changes who has access")
 	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantDN, "dn", "", "grant to this exact DN")
 	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")

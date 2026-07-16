@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -272,10 +273,39 @@ func TestCLI(t *testing.T) {
 			t.Errorf("config overlay enable --no-module: err=%v stderr=%s", oerr, se)
 		}
 		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"), "olcAccess")
-		// reorder an olcAccess rule and put it back (live, no restart)
+		// reorder an olcAccess rule and put it back (live, no restart). These two
+		// rules have disjoint targets, so the move changes nothing but the order.
 		db := "olcDatabase={1}mdb,cn=config"
 		has(t, run(t, root, rtPW, "config", "acl", "move", db, "0", "1"), "moved olcAccess {0} to {1}")
 		run(t, root, rtPW, "config", "acl", "move", db, "1", "0")
+
+		// A move that would silently change access is refused, not applied. The
+		// seed's ou=users rule ends in `by * none`; a narrow rule raised above it
+		// takes that rule's grantees off the subtree — which `lint` cannot see,
+		// because nothing becomes unreachable.
+		//
+		// olcAccess is snapshotted and restored verbatim: `acl revoke --dn` would
+		// strip that identity from every seed rule, and a rule ending in `by * none`
+		// survives a revoke by design (an explicit deny is not leftover noise).
+		snapshot := aclValues(t, db)
+		defer restoreACL(t, db, snapshot)
+
+		narrow := `to dn.subtree="ou=e2e.mv,ou=users,dc=example,dc=org" by dn.exact="cn=admin,ou=users,dc=example,dc=org" read by * none`
+		run(t, root, rtPW, "entry", "set", "--config-bind", db, "olcAccess", narrow, "--add")
+		last := strconv.Itoa(len(snapshot)) // appended after the seed's rules
+		_, se, merr := try(root, rtPW, "config", "acl", "move", db, last, "4")
+		if merr == nil {
+			t.Error("config acl move: a move that revokes access was applied instead of refused")
+		}
+		for _, want := range []string{"would silently change access", "cn=phpldapadmin", "--force"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("move refusal missing %q in:\n%s", want, se)
+			}
+		}
+		// a refusal must not have written anything
+		has(t, run(t, admin, adPW, "config", "acl", "list", db), "{"+last+"}to dn.subtree=\"ou=e2e.mv")
+		// --force does it anyway
+		has(t, run(t, root, rtPW, "config", "acl", "move", db, last, "4", "--force"), "moved olcAccess {"+last+"} to {4}")
 		// grant a group read on a subtree (by group.exact clause), then revoke
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org", "--group", "e2e.devs", "--access", "read"),
 			`granted read to group.exact="cn=e2e.devs`)
@@ -373,6 +403,35 @@ func TestCLI(t *testing.T) {
 		// profile commands read the (nonexistent) config file gracefully
 		_, _, _ = try(admin, adPW, "profile", "current")
 	})
+}
+
+// aclValues returns the database's olcAccess rule bodies, in index order and
+// without the {N} prefixes — the form `entry set` takes to write them back.
+func aclValues(t *testing.T, db string) []string {
+	t.Helper()
+	var res struct {
+		Attrs map[string][]string `json:"attrs"`
+	}
+	out := run(t, admin, adPW, "-o", "json", "config", "acl", "list", db)
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("parse acl list: %v\n%s", err, out)
+	}
+	values := res.Attrs["olcAccess"]
+	if len(values) == 0 {
+		t.Fatal("acl list returned no olcAccess")
+	}
+	bodies := make([]string, len(values))
+	for i, v := range values {
+		bodies[i] = v[strings.IndexByte(v, '}')+1:] // values come back ordered
+	}
+	return bodies
+}
+
+// restoreACL puts olcAccess back exactly as aclValues found it.
+func restoreACL(t *testing.T, db string, bodies []string) {
+	t.Helper()
+	args := append([]string{"entry", "set", "--config-bind", db, "olcAccess"}, bodies...)
+	run(t, root, rtPW, args...)
 }
 
 func tmpFile(t *testing.T, content string) string {
