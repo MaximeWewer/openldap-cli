@@ -88,6 +88,7 @@ func cleanup() {
 		try(admin, adPW, "user", "delete", u)
 	}
 	try(admin, adPW, "group", "delete", "e2e.devs")
+	try(admin, adPW, "svc", "revoke", "e2e.svc") // a failed svc subtest would leave its grants behind
 	try(admin, adPW, "svc", "delete", "e2e.svc")
 	try(admin, adPW, "ou", "delete", "e2e.unit", "--parent", "ou=users,dc=example,dc=org")
 	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
@@ -173,7 +174,22 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "svc", "add", "e2e.svc", "--subtree", "ou=users,dc=example,dc=org", "--access", "read"), "created")
 		has(t, run(t, admin, adPW, "svcs", "list"), "e2e.svc")
 		has(t, run(t, admin, adPW, "svc", "info", "e2e.svc"), "e2e.svc")
-		has(t, run(t, admin, adPW, "svc", "delete", "e2e.svc"), "removed 1 ACL clause")
+		// grant two trees, then revoke one: the other must survive. Both of
+		// ou=groups' rules are seeded, so the grant only adds clauses to them.
+		run(t, admin, adPW, "svc", "grant", "e2e.svc", "--tree", "ou=groups,dc=example,dc=org")
+		run(t, admin, adPW, "svc", "grant", "e2e.svc", "--tree", "ou=policies,dc=example,dc=org")
+		has(t, run(t, admin, adPW, "svc", "revoke", "e2e.svc", "--tree", "ou=groups,dc=example,dc=org"),
+			"on ou=groups,dc=example,dc=org")
+		// scoped revoke must not touch the other tree's grant
+		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"),
+			`to dn.base="ou=policies,dc=example,dc=org" by dn.exact="cn=e2e.svc`)
+		if _, se, rerr := try(admin, adPW, "svc", "revoke", "e2e.svc", "--tree", "ou=absent,dc=example,dc=org"); rerr == nil || !strings.Contains(se, "no access on ou=absent") {
+			t.Errorf("svc revoke on an ungranted tree: err=%v stderr=%s", rerr, se)
+		}
+		// no --tree: everything the account still has (ou=policies + its own subtree)
+		has(t, run(t, admin, adPW, "svc", "revoke", "e2e.svc"), "everywhere")
+		has(t, run(t, admin, adPW, "svc", "delete", "e2e.svc"), "removed 0 ACL clause")
+		has(t, run(t, admin, adPW, "config", "acl", "lint", "olcDatabase={1}mdb,cn=config"), "no dead or empty rules")
 	})
 
 	t.Run("ou", func(t *testing.T) {

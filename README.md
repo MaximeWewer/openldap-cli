@@ -231,6 +231,7 @@ aborts on the first failure (default: continue, per-item result).
 | `svc delete <name>`                                             | deletes entry **and** strips its ACL clauses                               |
 | `svc info <name>`                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)  |
 | `svc grant <name> --tree DN [--members-of <group>] [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs — the container rule (so the tree can be used as a search base) plus the entry rule — each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) |
+| `svc revoke <name> [--tree DN]`                                                | the counterpart of `svc grant`: `--tree` undoes **one** grant (both its rules), leaving the account's access to other trees alone; without `--tree` it removes every clause the account has on the database. Co-grantees in the same rule keep their access; rules left with no grantee are dropped |
 
 `olcAccess` is ordered: edits delete `{N}old` + add `{N}new` in one modify. New
 rules for an un-covered subtree are **appended at the end** — verify they
@@ -464,6 +465,11 @@ openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins
 openldap-cli svc grant app --tree ou=groups,dc=example,dc=org
 # read-write: the app may also create / modify / delete entries in the tree
 openldap-cli svc grant app --tree ou=devices,dc=example,dc=org --access write
+
+# hand one tree back (the other grants above are untouched)
+openldap-cli svc revoke app --tree ou=devices,dc=example,dc=org
+# ...or cut the account off entirely
+openldap-cli svc revoke app
 
 openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'   # prove nothing is shadowed
 ```

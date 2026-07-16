@@ -148,6 +148,63 @@ func TestRemoveGranteeReturnsRulesInIndexOrder(t *testing.T) {
 	}
 }
 
+// `svc revoke --tree` must undo exactly one `svc grant` — the container rule
+// and the entries rule for that tree — and nothing the account has elsewhere.
+func TestRemoveGranteeOnScopesToOneTree(t *testing.T) {
+	svc := `cn=app,ou=service-accounts,dc=example,dc=org`
+	who := DNWho(svc)
+	values := []string{
+		// the two rules `svc grant --tree ou=users` emits
+		`{0}to dn.base="ou=users,dc=example,dc=org" by ` + who + ` search by * break`,
+		`{1}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=example,dc=org) by ` + who + ` read by * break`,
+		// a grant on another tree: must survive untouched
+		`{2}to dn.base="ou=groups,dc=example,dc=org" by ` + who + ` search by * break`,
+		`{3}to dn.subtree="ou=groups,dc=example,dc=org" by ` + who + ` read by * break`,
+		`{4}to * by * read`,
+	}
+	bodies, removed, dropped := RemoveGranteeOn(values, who, "ou=users,dc=example,dc=org")
+	if removed != 2 || dropped != 2 {
+		t.Fatalf("removed = %d, dropped = %d, want 2/2", removed, dropped)
+	}
+	want := []string{
+		`to dn.base="ou=groups,dc=example,dc=org" by ` + who + ` search by * break`,
+		`to dn.subtree="ou=groups,dc=example,dc=org" by ` + who + ` read by * break`,
+		`to * by * read`,
+	}
+	if !slices.Equal(bodies, want) {
+		t.Errorf("bodies = %q, want %q", bodies, want)
+	}
+}
+
+// Scoping by target must not strip a co-grantee's access from the same rule,
+// and must leave a rule that still has clauses standing.
+func TestRemoveGranteeOnKeepsCoGrantees(t *testing.T) {
+	svc := `cn=app,ou=service-accounts,dc=example,dc=org`
+	who := DNWho(svc)
+	other := DNWho(`cn=other,ou=service-accounts,dc=example,dc=org`)
+	values := []string{`{0}to dn.subtree="ou=users,dc=example,dc=org" by ` + who + ` read by ` + other + ` read by * break`}
+	bodies, removed, dropped := RemoveGranteeOn(values, who, "ou=users,dc=example,dc=org")
+	if removed != 1 || dropped != 0 {
+		t.Fatalf("removed = %d, dropped = %d, want 1/0", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to dn.subtree="ou=users,dc=example,dc=org" by ` + other + ` read by * break`}) {
+		t.Errorf("bodies = %q", bodies)
+	}
+}
+
+// A tree with no grant for that account is not an excuse to touch other rules.
+func TestRemoveGranteeOnUnknownTree(t *testing.T) {
+	who := DNWho(`cn=app,ou=service-accounts,dc=example,dc=org`)
+	values := []string{`{0}to dn.subtree="ou=users,dc=example,dc=org" by ` + who + ` read by * break`}
+	bodies, removed, dropped := RemoveGranteeOn(values, who, "ou=absent,dc=example,dc=org")
+	if removed != 0 || dropped != 0 {
+		t.Fatalf("removed = %d, dropped = %d, want 0/0", removed, dropped)
+	}
+	if !slices.Equal(bodies, []string{`to dn.subtree="ou=users,dc=example,dc=org" by ` + who + ` read by * break`}) {
+		t.Errorf("bodies = %q", bodies)
+	}
+}
+
 // No match must mean no write at all, not a rewrite of every rule.
 func TestRemoveGranteeNoMatch(t *testing.T) {
 	values := []string{`{0}to * by * read`}

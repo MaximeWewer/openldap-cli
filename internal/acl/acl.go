@@ -168,6 +168,21 @@ func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 // lookup. `by * none` is kept: that is a deliberate deny, and silently dropping
 // it would widen access.
 func RemoveGrantee(values []string, who string) (bodies []string, removed, dropped int) {
+	return removeGrantee(values, who, nil)
+}
+
+// RemoveGranteeOn is RemoveGrantee restricted to the rules protecting target
+// (any scope, filtered or not) — the counterpart of granting one tree. The
+// account keeps whatever it was granted elsewhere.
+func RemoveGranteeOn(values []string, who, target string) (bodies []string, removed, dropped int) {
+	want := strings.ToLower(strings.TrimSpace(target))
+	return removeGrantee(values, who, func(s selector) bool {
+		return s.kind == "dn" && s.dn == want
+	})
+}
+
+// removeGrantee strips who's clauses from the rules match accepts (nil = all).
+func removeGrantee(values []string, who string, match func(selector) bool) (bodies []string, removed, dropped int) {
 	type rule struct {
 		idx  int
 		body string
@@ -183,6 +198,16 @@ func RemoveGrantee(values []string, who string) (bodies []string, removed, dropp
 		if !strings.Contains(r.body, who) {
 			bodies = append(bodies, r.body)
 			continue
+		}
+		if match != nil {
+			sel := r.body
+			if i := strings.Index(r.body, " by "); i >= 0 {
+				sel = r.body[:i]
+			}
+			if !match(parseSelector(sel)) {
+				bodies = append(bodies, r.body)
+				continue
+			}
 		}
 		parts := strings.Split(r.body, " by ") // parts[0]="to <target>", rest="<who> <access>"
 		kept := []string{parts[0]}

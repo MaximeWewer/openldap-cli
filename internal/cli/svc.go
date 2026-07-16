@@ -140,6 +140,69 @@ var svcGrantCmd = &cobra.Command{
 	},
 }
 
+// ---- revoke -------------------------------------------------------------
+
+var svcRevokeTree string
+
+var svcRevokeCmd = &cobra.Command{
+	Use:   "revoke <name>",
+	Short: "Take back a service account's access (the counterpart of `svc grant`)",
+	Long: "Removes the account's `by` clauses from olcAccess. With --tree it undoes a\n" +
+		"single `svc grant` — both the container and the entries rule for that tree —\n" +
+		"and leaves whatever the account was granted on other trees alone. Without\n" +
+		"--tree it removes every clause the account has on the database.\n\n" +
+		"A rule left with no grantee is dropped rather than kept as an empty shell.\n" +
+		"Other identities named in the same rule keep their access.",
+	Args: cobra.ExactArgs(1),
+	Example: "  # undo exactly one `svc grant`\n" +
+		"  openldap-cli svc revoke app --tree ou=users,dc=example,dc=org\n" +
+		"  # remove the account's access everywhere on the database\n" +
+		"  openldap-cli svc revoke app",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := strings.TrimSpace(args[0])
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		sa := svcDN(cli, name)
+
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+
+		tree := strings.TrimSpace(svcRevokeTree)
+		var removed, dropped int
+		if tree == "" {
+			removed, dropped, err = cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(sa))
+		} else {
+			removed, dropped, err = cc.RemoveAccessGranteeOn(svcACLDB, acl.DNWho(sa), tree)
+		}
+		if err != nil {
+			return fmt.Errorf("revoke on %s: %w", svcACLDB, err)
+		}
+		if removed == 0 {
+			where := "on this database"
+			if tree != "" {
+				where = "on " + tree
+			}
+			return fmt.Errorf("%s has no access %s to revoke", name, where)
+		}
+		log.Debug().Str("sa", sa).Str("tree", tree).Int("removed", removed).Int("dropped", dropped).Msg("svc revoke")
+		scope := "everywhere"
+		if tree != "" {
+			scope = "on " + tree
+		}
+		action := fmt.Sprintf("revoked %d clause(s) for %s %s", removed, name, scope)
+		if dropped > 0 {
+			action += fmt.Sprintf(" (%d now-empty rule(s) dropped)", dropped)
+		}
+		return out.Emit(okResult{Action: action + " via", DN: svcACLDB})
+	},
+}
+
 // ---- add ----------------------------------------------------------------
 
 var (
@@ -424,7 +487,8 @@ func init() {
 	svcGrantCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
 	svcGrantCmd.Flags().StringVar(&svcGrantMembersOf, "members-of", "", "only entries that are members of this group (name or DN) — least privilege")
 	svcGrantCmd.Flags().StringVar(&svcGrantAccess, "access", "read", "access level on the entries: read|search|write|manage (the container follows: search, or write for write|manage)")
-	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantCmd)
+	svcRevokeCmd.Flags().StringVar(&svcRevokeTree, "tree", "", "only the rules protecting this subtree (default: every clause the account has)")
+	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantCmd, svcRevokeCmd)
 	rootCmd.AddCommand(svcCmd)
 
 	svcsCmd.AddCommand(svcListCmd) // listing is plural

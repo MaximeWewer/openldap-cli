@@ -26,11 +26,28 @@ func (c *Client) InjectAccess(dbDN string, o acl.InjectOpts) (rule string, appen
 // from olcAccess on dbDN, dropping any rule left with nothing to say. Reports
 // how many clauses were removed and how many rules that emptied out.
 func (c *Client) RemoveAccessGrantee(dbDN, who string) (removed, dropped int, err error) {
+	return c.removeAccessGrantee(dbDN, who, "")
+}
+
+// RemoveAccessGranteeOn strips who's clauses only from the rules protecting
+// target, leaving its access to other trees intact.
+func (c *Client) RemoveAccessGranteeOn(dbDN, who, target string) (removed, dropped int, err error) {
+	return c.removeAccessGrantee(dbDN, who, target)
+}
+
+// removeAccessGrantee applies the revoke; target "" means every rule.
+func (c *Client) removeAccessGrantee(dbDN, who, target string) (removed, dropped int, err error) {
 	e, err := c.ReadEntry(dbDN, []string{"olcAccess"})
 	if err != nil {
 		return 0, 0, err
 	}
-	bodies, removed, dropped := acl.RemoveGrantee(e.GetAll("olcAccess"), who)
+	values := e.GetAll("olcAccess")
+	var bodies []string
+	if target == "" {
+		bodies, removed, dropped = acl.RemoveGrantee(values, who)
+	} else {
+		bodies, removed, dropped = acl.RemoveGranteeOn(values, who, target)
+	}
 	if removed == 0 {
 		return 0, 0, nil
 	}
