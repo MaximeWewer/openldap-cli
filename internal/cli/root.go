@@ -53,6 +53,7 @@ var rootCmd = &cobra.Command{
 // and as structured records in json mode.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		err = explain(err) // add what the raw LDAP result code does not say
 		if flagLogFormat == "json" {
 			log.Error().Err(err).Msg("command failed")
 		} else {

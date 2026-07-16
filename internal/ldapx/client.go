@@ -43,7 +43,7 @@ func Connect(p *config.Profile) (*Client, error) {
 			return nil, fmt.Errorf("sasl external bind: %w", err)
 		}
 	case p.BindDN != "":
-		if err := conn.Bind(p.BindDN, p.BindPW); err != nil {
+		if err := bindWithPolicy(conn, p.BindDN, p.BindPW); err != nil {
 			_ = conn.Close()
 			return nil, fmt.Errorf("bind as %s: %w", p.BindDN, err)
 		}

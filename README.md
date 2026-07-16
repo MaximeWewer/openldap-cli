@@ -311,10 +311,22 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 
 ## Gotchas worth knowing
 
-- **ppolicy lockout is real:** repeated bad binds (`pwdMaxFailure`) lock the
-  data admin. Recover via a rootDN profile (`user unlock <admin>`).
-- **`ppolicy set` / OUs under the base / `svc` ACLs** require the rootDN — your
-  `ou=users` admin has write only inside specific subtrees.
+- **ppolicy lockout is real, and looks exactly like a typo.** Repeated bad binds
+  (`pwdMaxFailure`) lock the data admin, and slapd then answers the *correct*
+  password with `Invalid Credentials` — so the natural reaction, retrying, burns
+  another attempt. The CLI asks for the password-policy control on every bind: a
+  server that discloses lockout (ppolicy overlay with **`olcPPolicyUseLockout:
+  TRUE`**) gets a plain "the account is locked by the password policy" plus the
+  `user unlock` command. That flag is **FALSE by default** — deliberately, since
+  disclosing lockout confirms the account exists — and then nobody can tell the
+  two apart, so the error says so and points at `user info <login>` (run as an
+  admin, it reports `LOCKED`). Recover with a rootDN profile:
+  `user unlock <admin>`.
+- **`ppolicy set` / OUs under the base / `svc` ACLs require the rootDN** — your
+  `ou=users` admin has write only inside the subtrees the ACLs name. A refusal
+  (`Insufficient Access Rights`) names the rootDN to use: the CLI looks up
+  `olcRootDN` for your `base_dn` via the config bind and prints it, so you do not
+  have to go find it. Without a config bind it falls back to naming the rule.
 - **`--posix` needs the `nis` schema loaded server-side** — and says so. Without
   it, `posixAccount` and its attributes do not exist, and slapd rejects the add
   on whichever piece it checks first (`Undefined Attribute Type: homeDirectory`),

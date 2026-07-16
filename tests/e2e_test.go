@@ -85,7 +85,7 @@ func has(t *testing.T, s, sub string) {
 func cleanup() {
 	// delete each individually — a single missing login would abort a variadic
 	// `users delete`, leaving the rest behind.
-	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak"} {
+	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak", "e2e.lockme"} {
 		try(admin, adPW, "user", "delete", u)
 	}
 	try(admin, adPW, "group", "delete", "e2e.devs")
@@ -110,6 +110,55 @@ func TestCLI(t *testing.T) {
 	}
 	cleanup()
 	t.Cleanup(cleanup)
+
+	t.Run("errors", func(t *testing.T) {
+		// A write the ACLs don't allow must name the rootDN to use, not just
+		// say 50. The seed's data admin cannot write under ou=policies.
+		_, se, err := try(admin, adPW, "ppolicy", "set", "e2e.denied", "--min-length", "12")
+		if err == nil {
+			t.Fatal("ppolicy set as the data admin unexpectedly succeeded")
+		}
+		for _, want := range []string{"Insufficient Access Rights", "rootDN of dc=example,dc=org", "cn=admin,dc=example,dc=org"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("code-50 hint missing %q in:\n%s", want, se)
+			}
+		}
+		// A wrong password must mention that a lockout is indistinguishable,
+		// since retrying is what deepens it.
+		_, se, err = try("cn=user1.name,ou=users,dc=example,dc=org", "definitely-wrong", "whoami")
+		if err == nil {
+			t.Fatal("bind with a wrong password unexpectedly succeeded")
+		}
+		for _, want := range []string{"Invalid Credentials", "lockout looks identical", "user info"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("code-49 hint missing %q in:\n%s", want, se)
+			}
+		}
+		// ...and a real lockout, on a server that discloses it, must be named.
+		ppolicyDN := "olcOverlay={2}ppolicy,olcDatabase={1}mdb,cn=config"
+		run(t, root, rtPW, "config", "set", ppolicyDN, "olcPPolicyUseLockout", "TRUE")
+		defer func() { // try, not run: a cleanup must not fail the test
+			try(root, rtPW, "config", "set", ppolicyDN, "olcPPolicyUseLockout")
+			try(root, rtPW, "user", "unlock", "e2e.lockme")
+			try(admin, adPW, "user", "delete", "e2e.lockme")
+		}()
+		const lockPW = "e2e-lockme-password-1" // defaultppolicy: pwdMinLength = 16
+		run(t, admin, adPW, "user", "add", "e2e.lockme", "--password", lockPW)
+		lockDN := "cn=e2e.lockme,ou=users,dc=example,dc=org"
+		for range 4 { // defaultppolicy: pwdMaxFailure = 3
+			try(lockDN, "wrong-on-purpose", "whoami")
+		}
+		// the RIGHT password now: only the policy control can explain this
+		_, se, err = try(lockDN, lockPW, "whoami")
+		if err == nil {
+			t.Fatal("the account did not lock; the lockout message is untested")
+		}
+		for _, want := range []string{"locked by the password policy", "user unlock"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("lockout message missing %q in:\n%s", want, se)
+			}
+		}
+	})
 
 	t.Run("general", func(t *testing.T) {
 		has(t, run(t, admin, adPW, "whoami"), "cn=admin,ou=users")
