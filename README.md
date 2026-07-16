@@ -252,8 +252,10 @@ an orphan `to <subtree> by * none` (same as the bash script).
 
 | Command                                                                        | Notes                                                                                                                    |
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `config db list` / `config overlay list`                                       | introspect databases / overlays                                                                                          |
+| `config db list` / `config overlay list`                                       | introspect databases / overlays (`list` marks each overlay `active` or `DISABLED`)                                       |
 | `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas)     |
+| `config overlay enable <name> [--db <dn>] [--no-module]`                       | enable an overlay (memberof, refint, ppolicy, accesslog, unique, …) on the database holding `base_dn`; **loads its module first** if the schema is missing, and resolves its config `objectClass` from the server's schema. Idempotent; re-enables one turned off by `disable`. `--no-module` fails instead of loading |
+| `config overlay disable <name> [--db <dn>] [--purge]`                          | set `olcDisabled: TRUE` — stops the overlay live but **keeps its settings**, so `enable` restores them. `--purge` deletes the entry and its settings instead. The module stays loaded either way (slapd refuses to unload one) |
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
 | `config acl move <database-dn> <from> <to>`                                    | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it |
 | `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); `--at` places a new rule **above** the broad rule that would shadow it; new rules end in `by * break` (additive) |
@@ -492,7 +494,12 @@ openldap-cli --profile prod-root ppolicy delete strict       # needs the rootDN 
 
 ```bash
 openldap-cli config db list
-openldap-cli config overlay list
+openldap-cli config overlay list                          # each one: active | DISABLED
+# turn an overlay on (loads memberof.so if it isn't loaded yet) — memberof is
+# what makes `svc grant --members-of` and the memberOf attribute work:
+openldap-cli --profile prod-root config overlay enable memberof
+openldap-cli --profile prod-root config overlay disable ppolicy   # off, settings kept
+openldap-cli --profile prod-root config overlay enable ppolicy    # back on, as it was
 openldap-cli config acl list 'olcDatabase={1}mdb,cn=config'
 openldap-cli --profile prod-root config acl move 'olcDatabase={1}mdb,cn=config' 8 5   # raise a shadowed rule
 # several service accounts, same rights on a tree -> one group grant:

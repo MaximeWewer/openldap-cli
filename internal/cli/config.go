@@ -11,7 +11,35 @@ import (
 	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
+	"github.com/MaximeWewer/openldap-cli/internal/overlay"
 )
+
+// overlayList renders `config overlay list`, marking the ones turned off.
+type overlayList struct {
+	Overlays []overlayItem `json:"overlays" yaml:"overlays"`
+}
+
+type overlayItem struct {
+	Name     string `json:"name" yaml:"name"`
+	DN       string `json:"dn" yaml:"dn"`
+	Disabled bool   `json:"disabled" yaml:"disabled"`
+}
+
+func (l overlayList) Text() string {
+	if len(l.Overlays) == 0 {
+		return "no overlays configured"
+	}
+	var b strings.Builder
+	for _, o := range l.Overlays {
+		state := "active"
+		if o.Disabled {
+			state = "DISABLED"
+		}
+		fmt.Fprintf(&b, "%-12s %-8s %s\n", o.Name, state, o.DN)
+	}
+	fmt.Fprintf(&b, "(%d overlays)", len(l.Overlays))
+	return b.String()
+}
 
 var configCmd = &cobra.Command{
 	Use:   "config",
@@ -161,7 +189,7 @@ var configOverlayCmd = &cobra.Command{Use: "overlay", Short: "Overlays"}
 
 var configOverlayListCmd = &cobra.Command{
 	Use:   "list",
-	Short: "List configured overlays",
+	Short: "List configured overlays and whether each one is active",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cc, err := connectConfig()
@@ -169,11 +197,109 @@ var configOverlayListCmd = &cobra.Command{
 			return err
 		}
 		defer cc.Close()
-		entries, err := cc.Search("cn=config", "(objectClass=olcOverlayConfig)", []string{"olcOverlay"})
+		entries, err := cc.Search("cn=config", "(objectClass=olcOverlayConfig)", []string{"olcOverlay", "olcDisabled"})
 		if err != nil {
 			return err
 		}
-		return out.Emit(toEntryList(entries))
+		res := overlayList{}
+		for _, e := range entries {
+			res.Overlays = append(res.Overlays, overlayItem{
+				Name:     overlay.Name(e.Get("olcOverlay")),
+				DN:       e.DN,
+				Disabled: strings.EqualFold(e.Get("olcDisabled"), "TRUE"),
+			})
+		}
+		return out.Emit(res)
+	},
+}
+
+// ---- overlay enable/disable ---------------------------------------------
+
+var (
+	overlayDB       string
+	overlayNoModule bool
+	overlayPurge    bool
+)
+
+// overlayDatabaseDN resolves --db, defaulting to the database holding base_dn.
+func overlayDatabaseDN(cc *ldapx.Client) (string, error) {
+	if db := strings.TrimSpace(overlayDB); db != "" {
+		return db, nil
+	}
+	base := cc.Config().BaseDN
+	if base == "" {
+		return "", fmt.Errorf("no base_dn in the profile: pass --db <database-dn> (see `config db list`)")
+	}
+	return cc.DataDatabaseDN(base)
+}
+
+var configOverlayEnableCmd = &cobra.Command{
+	Use:   "enable <name>",
+	Short: "Enable an overlay on a database, loading its module if needed",
+	Long: "Adds the overlay entry under the database (memberof, refint, ppolicy,\n" +
+		"accesslog, unique, …). An overlay entry is only valid once its module is\n" +
+		"loaded — otherwise slapd rejects it with the opaque `objectClass: value #1\n" +
+		"invalid per syntax` — so the module is loaded first when missing, and the\n" +
+		"overlay's config objectClass is read back from the server's schema rather\n" +
+		"than guessed.\n\n" +
+		"Re-running is a no-op, and an overlay previously turned off with `disable`\n" +
+		"is switched back on with its settings intact.\n\n" +
+		"Loading a module is one-way: slapd refuses to unload one until restart.",
+	Args:    cobra.ExactArgs(1),
+	Example: "  openldap-cli config overlay enable memberof\n  openldap-cli config overlay enable unique --db 'olcDatabase={1}mdb,cn=config'",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := strings.ToLower(strings.TrimSpace(args[0]))
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		db, err := overlayDatabaseDN(cc)
+		if err != nil {
+			return err
+		}
+		st, err := cc.EnableOverlay(db, name, !overlayNoModule)
+		if err != nil {
+			return err
+		}
+		if st.Module != "" {
+			log.Info().Str("module", st.Module).Msg("module loaded (stays loaded until slapd restarts)")
+		}
+		log.Debug().Str("db", db).Str("overlay", name).Str("action", st.Action).Msg("overlay enable")
+		return out.Emit(okResult{Action: "overlay " + name + " " + st.Action + ":", DN: st.DN})
+	},
+}
+
+var configOverlayDisableCmd = &cobra.Command{
+	Use:   "disable <name>",
+	Short: "Disable an overlay (olcDisabled: TRUE), keeping its configuration",
+	Long: "Stops the overlay at runtime by setting olcDisabled: TRUE, keeping its\n" +
+		"entry and settings so `enable` restores them. Use --purge to delete the\n" +
+		"entry and its settings instead.\n\n" +
+		"The overlay's module stays loaded either way: slapd rejects deleting an\n" +
+		"olcModuleLoad value. That is harmless — an unused module does nothing.",
+	Args:    cobra.ExactArgs(1),
+	Example: "  openldap-cli config overlay disable ppolicy\n  openldap-cli config overlay disable unique --purge",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := strings.ToLower(strings.TrimSpace(args[0]))
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		db, err := overlayDatabaseDN(cc)
+		if err != nil {
+			return err
+		}
+		st, err := cc.DisableOverlay(db, name, overlayPurge)
+		if err != nil {
+			return err
+		}
+		if st.Action == "unchanged" && st.DN == "" {
+			return fmt.Errorf("overlay %q is not configured on %s", name, db)
+		}
+		log.Debug().Str("db", db).Str("overlay", name).Str("action", st.Action).Msg("overlay disable")
+		return out.Emit(okResult{Action: "overlay " + name + " " + st.Action + ":", DN: st.DN})
 	},
 }
 
@@ -494,7 +620,12 @@ func init() {
 
 	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd)
 	configDBCmd.AddCommand(configDBListCmd, configDBResizeCmd)
-	configOverlayCmd.AddCommand(configOverlayListCmd)
+	for _, c := range []*cobra.Command{configOverlayEnableCmd, configOverlayDisableCmd} {
+		c.Flags().StringVar(&overlayDB, "db", "", "database entry to act on (default: the one holding base_dn)")
+	}
+	configOverlayEnableCmd.Flags().BoolVar(&overlayNoModule, "no-module", false, "fail instead of loading the overlay's module when its schema is missing")
+	configOverlayDisableCmd.Flags().BoolVar(&overlayPurge, "purge", false, "delete the overlay entry and its settings instead of just deactivating it")
+	configOverlayCmd.AddCommand(configOverlayListCmd, configOverlayEnableCmd, configOverlayDisableCmd)
 	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantDN, "dn", "", "grant to this exact DN")
 	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")

@@ -91,6 +91,8 @@ func cleanup() {
 	try(admin, adPW, "svc", "delete", "e2e.svc")
 	try(admin, adPW, "ou", "delete", "e2e.unit", "--parent", "ou=users,dc=example,dc=org")
 	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
+	// a failed overlay subtest would otherwise leave it enabled
+	try(admin, adPW, "config", "overlay", "disable", "constraint", "--purge")
 	for _, d := range []string{"cn=e2e.dev,ou=users,dc=example,dc=org", "cn=e2e.dev2,ou=users,dc=example,dc=org"} {
 		try(admin, adPW, "entry", "delete", d)
 	}
@@ -199,7 +201,21 @@ func TestCLI(t *testing.T) {
 		if _, se, rerr := try(root, rtPW, "config", "db", "resize", "olcDatabase={1}mdb,cn=config", "4Zorks"); rerr == nil || !strings.Contains(se, "unknown size unit") {
 			t.Errorf("config db resize bad unit: err=%v stderr=%s", rerr, se)
 		}
-		has(t, run(t, admin, adPW, "config", "overlay", "list"), "olcOverlay")
+		has(t, run(t, admin, adPW, "config", "overlay", "list"), "memberof     active")
+		// overlay lifecycle on `constraint`: nothing in the seed depends on it, so
+		// enabling it is inert. First run also exercises the module-load path
+		// (constraint.so is not in the bootstrap's olcModuleLoad list).
+		has(t, run(t, admin, adPW, "config", "overlay", "enable", "constraint"), "overlay constraint created")
+		has(t, run(t, admin, adPW, "config", "overlay", "enable", "constraint"), "overlay constraint unchanged")
+		has(t, run(t, admin, adPW, "config", "overlay", "disable", "constraint"), "overlay constraint disabled")
+		has(t, run(t, admin, adPW, "config", "overlay", "list"), "DISABLED")
+		has(t, run(t, admin, adPW, "config", "overlay", "enable", "constraint"), "overlay constraint re-enabled")
+		has(t, run(t, admin, adPW, "config", "overlay", "disable", "constraint", "--purge"), "overlay constraint deleted")
+		// a missing module must be named, not surfaced as slapd's opaque
+		// "objectClass: value #1 invalid per syntax"
+		if _, se, oerr := try(admin, adPW, "config", "overlay", "enable", "valsort", "--no-module"); oerr == nil || !strings.Contains(se, "is not loaded") {
+			t.Errorf("config overlay enable --no-module: err=%v stderr=%s", oerr, se)
+		}
 		has(t, run(t, admin, adPW, "config", "acl", "list", "olcDatabase={1}mdb,cn=config"), "olcAccess")
 		// reorder an olcAccess rule and put it back (live, no restart)
 		db := "olcDatabase={1}mdb,cn=config"
