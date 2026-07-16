@@ -1,6 +1,6 @@
 # Self-contained test OpenLDAP, faithful to MaximeWewer/openldap-setup
 # (standalone). Bootstrap (cn=config + seed data) is done by bootstrap.sh BEFORE
-# this compose starts, via slapadd into ./data/slapd.d.
+# this compose starts, via slapadd into ./testdata/slapd.d.
 networks:
   ldap-internal:
     driver: bridge
@@ -16,9 +16,9 @@ services:
       - "636:636"
     volumes:
       - ./certs:/etc/openldap/certs:ro
-      - ./data/slapd.d:/etc/openldap/slapd.d
-      - ./data/openldap-data:/var/lib/openldap/openldap-data
-      - ./data/accesslog-data:/var/lib/openldap/accesslog-data
+      - ./testdata/slapd.d:/etc/openldap/slapd.d
+      - ./testdata/openldap-data:/var/lib/openldap/openldap-data
+      - ./testdata/accesslog-data:/var/lib/openldap/accesslog-data
     networks:
       - ldap-internal
     logging:

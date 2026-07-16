@@ -4,7 +4,7 @@
 !.openldap-cli.example.yaml
 
 # test env runtime artifacts
-tests/data/
+tests/testdata/
 tests/certs/
 tests/seed/_combined.ldif
 tests/init-config/_combined.ldif

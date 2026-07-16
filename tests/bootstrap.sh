@@ -7,8 +7,16 @@
 #      ldap user) so the generated files are already ldap-owned
 #   3. `docker compose up -d`, then wait for :389
 #
-# Idempotent: skips slapadd if ./data/slapd.d is already populated.
-# `--reset` wipes ./data and rebuilds from scratch.
+# Idempotent: skips slapadd if ./testdata/slapd.d is already populated.
+# `--reset` wipes ./testdata and rebuilds from scratch.
+#
+# The runtime state MUST live in a directory the go tool ignores (one named
+# `testdata`, or prefixed with `_` or `.`). slapadd creates
+# testdata/slapd.d/cn=config owned by the container's ldap uid and mode 0750, so
+# the go tool cannot read it — and, unable to rule out that it is a package, it
+# fails `go mod tidy` / `go test ./...` with both "permission denied" and
+# "malformed import path ... invalid char '='". Renaming this to plain ./data
+# brings that back.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -25,16 +33,16 @@ if [[ $RESET -eq 1 ]]; then
   docker compose down -v 2>/dev/null || true
   # slapadd-created files are owned by the container's ldap uid; wipe them with
   # a throwaway busybox (the openldap image has no shell/rm).
-  if [[ -d ./data ]]; then
-    docker run --rm -v "$PWD/data:/d" busybox sh -c 'rm -rf /d/*' 2>/dev/null || true
+  if [[ -d ./testdata ]]; then
+    docker run --rm -v "$PWD/testdata:/d" busybox sh -c 'rm -rf /d/*' 2>/dev/null || true
   fi
-  rm -rf ./data ./seed/_combined.ldif ./init-config/_combined.ldif
+  rm -rf ./testdata ./seed/_combined.ldif ./init-config/_combined.ldif
 fi
 
-mkdir -p ./data/slapd.d ./data/openldap-data ./data/accesslog-data ./certs
-chmod -R 777 ./data   # let the container's ldap uid write into bind mounts
+mkdir -p ./testdata/slapd.d ./testdata/openldap-data ./testdata/accesslog-data ./certs
+chmod -R 777 ./testdata   # let the container's ldap uid write into bind mounts
 
-if [[ -z "$(ls -A ./data/slapd.d 2>/dev/null)" ]]; then
+if [[ -z "$(ls -A ./testdata/slapd.d 2>/dev/null)" ]]; then
   # This slapd build's slapadd does not expand `include:` schema directives, so
   # we splice the image's own schema ldifs (cn=<name>,cn=schema,cn=config) in
   # their place, producing a self-contained config ldif.
@@ -59,9 +67,9 @@ if [[ -z "$(ls -A ./data/slapd.d 2>/dev/null)" ]]; then
   echo ">> slapadd cn=config (-n0)"
   docker run --rm --user "${LDAP_UID}:${LDAP_GID}" \
     -v "$PWD/init-config:/init-config:ro" \
-    -v "$PWD/data/slapd.d:/etc/openldap/slapd.d" \
-    -v "$PWD/data/openldap-data:/var/lib/openldap/openldap-data" \
-    -v "$PWD/data/accesslog-data:/var/lib/openldap/accesslog-data" \
+    -v "$PWD/testdata/slapd.d:/etc/openldap/slapd.d" \
+    -v "$PWD/testdata/openldap-data:/var/lib/openldap/openldap-data" \
+    -v "$PWD/testdata/accesslog-data:/var/lib/openldap/accesslog-data" \
     --entrypoint slapadd "$IMAGE" \
     -n 0 -F /etc/openldap/slapd.d -l /init-config/_combined.ldif
 
@@ -70,9 +78,9 @@ if [[ -z "$(ls -A ./data/slapd.d 2>/dev/null)" ]]; then
   for f in ./seed/0*.ldif; do cat "$f" >>./seed/_combined.ldif; echo >>./seed/_combined.ldif; done
   docker run --rm --user "${LDAP_UID}:${LDAP_GID}" \
     -v "$PWD/seed:/seed:ro" \
-    -v "$PWD/data/slapd.d:/etc/openldap/slapd.d:ro" \
-    -v "$PWD/data/openldap-data:/var/lib/openldap/openldap-data" \
-    -v "$PWD/data/accesslog-data:/var/lib/openldap/accesslog-data" \
+    -v "$PWD/testdata/slapd.d:/etc/openldap/slapd.d:ro" \
+    -v "$PWD/testdata/openldap-data:/var/lib/openldap/openldap-data" \
+    -v "$PWD/testdata/accesslog-data:/var/lib/openldap/accesslog-data" \
     --entrypoint slapadd "$IMAGE" \
     -n 1 -F /etc/openldap/slapd.d -l /seed/_combined.ldif
 else
