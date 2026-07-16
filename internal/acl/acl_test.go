@@ -88,14 +88,14 @@ func TestRemoveGranteeNoMatch(t *testing.T) {
 
 func TestReorder(t *testing.T) {
 	// intentionally out of order to prove it sorts by index first
-	vals := []string{"{5}to dn.subtree=g by X write by * none", "{8}to dn.subtree=g/vcf by Y read by * none", "{0}to * by * break"}
+	vals := []string{"{5}to dn.subtree=g by X write by * none", "{8}to dn.subtree=g/sub by Y read by * none", "{0}to * by * break"}
 
 	// move {8} above {5} -> position 1
 	got, err := Reorder(vals, 2, 1)
 	if err != nil {
 		t.Fatalf("Reorder: %v", err)
 	}
-	want := []string{"to * by * break", "to dn.subtree=g/vcf by Y read by * none", "to dn.subtree=g by X write by * none"}
+	want := []string{"to * by * break", "to dn.subtree=g/sub by Y read by * none", "to dn.subtree=g by X write by * none"}
 	if len(got) != len(want) {
 		t.Fatalf("len=%d want %d: %v", len(got), len(want), got)
 	}
@@ -167,5 +167,18 @@ func TestInjectFilterScopeAndPlacement(t *testing.T) {
 	}
 	if !strings.Contains(edit.Add, `by dn.exact="cn=a,dc=x" search by dn.exact="`+sa+`" search by * break`) {
 		t.Errorf("joined rule = %q", edit.Add)
+	}
+}
+
+func TestInjectIsIdempotent(t *testing.T) {
+	sa := `cn=app,dc=x`
+	v := []string{`{4}to dn.subtree="ou=users,dc=x" by dn.exact="` + sa + `" read by * break`}
+	edit, isNew := Inject(v, InjectOpts{Target: "ou=users,dc=x", Who: DNWho(sa), Access: "read", At: -1})
+	if isNew || edit.Add != "" || edit.Delete != "" {
+		t.Errorf("re-granting an existing clause must be a no-op, got %+v (new=%v)", edit, isNew)
+	}
+	// a different access level is still a change
+	if e2, _ := Inject(v, InjectOpts{Target: "ou=users,dc=x", Who: DNWho(sa), Access: "write", At: -1}); e2.Add == "" {
+		t.Error("a different access level must still be injected")
 	}
 }

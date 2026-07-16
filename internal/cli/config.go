@@ -210,7 +210,7 @@ var configACLMoveCmd = &cobra.Command{
 		"entry (rootDN excepted). Give the narrow rule a `by * break` (or the\n" +
 		"needed `by ... ` clauses) first — edit it with `config set` if so.",
 	Args: cobra.ExactArgs(3),
-	Example: "  # raise the vcf-admin rule {8} above the broad ou=groups rule {5}\n" +
+	Example: "  # raise a specific rule above the broad ou=groups rule that shadows it\n" +
 		"  openldap-cli config acl move 'olcDatabase={1}mdb,cn=config' 8 5",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		from, err := strconv.Atoi(strings.Trim(args[1], "{}"))
@@ -407,6 +407,9 @@ var configACLGrantCmd = &cobra.Command{
 			return fmt.Errorf("grant on %s: %w", db, err)
 		}
 		log.Debug().Str("db", db).Str("who", who).Bool("new_rule", appended).Msg("olcAccess grant")
+		if rule == "" {
+			return out.Emit(okResult{Action: "already granted (no change) to " + who + " on", DN: db})
+		}
 		res := okResult{Action: "granted " + aclGrantAccess + " to " + who + " on", DN: db, Detail: rule}
 		if appended && aclGrantAt < 0 {
 			res.Detail = rule + "\n  (new rule appended at the end — place it with --at, or move it with `config acl move`, so a broader rule above doesn't shadow it)"

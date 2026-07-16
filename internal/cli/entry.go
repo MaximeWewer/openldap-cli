@@ -38,7 +38,7 @@ var entryGetCmd = &cobra.Command{
 	Use:     "get <dn> [attr...]",
 	Short:   "Read one entry by DN (base scope; all attributes if none named)",
 	Args:    cobra.MinimumNArgs(1),
-	Example: "  openldap-cli entry get 'cn=vcf-admin,ou=groups,dc=example,dc=org' member",
+	Example: "  openldap-cli entry get 'cn=admins,ou=groups,dc=example,dc=org' member",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := entryConnect()
 		if err != nil {

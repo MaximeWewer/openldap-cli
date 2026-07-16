@@ -27,6 +27,98 @@ func svcDN(cli *ldapx.Client, name string) string {
 	return "cn=" + name + "," + svcOU + "," + cli.Config().BaseDN
 }
 
+// ---- grant-read (the "an app must search a tree" recipe) ----------------
+
+var (
+	svcGrantTree      string
+	svcGrantMembersOf string
+	svcGrantAccess    string
+)
+
+var svcGrantReadCmd = &cobra.Command{
+	Use:   "grant-read <name>",
+	Short: "Let a service account search a tree and read its entries (both rules, auto-placed)",
+	Long: "Emits the two rules an app needs to SEARCH a tree and READ what is in it:\n\n" +
+		"  1. to dn.base=\"<tree>\"    by <sa> search by * break   — to base/traverse the search\n" +
+		"  2. to dn.subtree=\"<tree>\" [filter=(memberOf=<group>)] by <sa> read by * break\n\n" +
+		"Without rule 1 a search on <tree> fails with noSuchObject even though the\n" +
+		"entries are readable. Both rules end in `by * break`, so they are purely\n" +
+		"additive — no other identity loses access — and each is inserted ABOVE the\n" +
+		"first rule that would otherwise shadow it (no manual index needed).\n\n" +
+		"With --members-of the account sees ONLY that group's members (least\n" +
+		"privilege); needs the memberof overlay. Re-running is idempotent: the clause\n" +
+		"joins the existing rule instead of creating a duplicate.",
+	Args: cobra.ExactArgs(1),
+	Example: "  # the app may list only the members of a group\n" +
+		"  openldap-cli svc grant-read app --tree ou=users,dc=example,dc=org --members-of admins\n" +
+		"  # the app may list every group\n" +
+		"  openldap-cli svc grant-read app --tree ou=groups,dc=example,dc=org",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		name := strings.TrimSpace(args[0])
+		tree := strings.TrimSpace(svcGrantTree)
+		if tree == "" {
+			return fmt.Errorf("--tree is required (the subtree the account must read)")
+		}
+		if !validAccess(svcGrantAccess) {
+			return fmt.Errorf("--access must be one of none|disclose|auth|compare|search|read|write|manage")
+		}
+
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		sa := svcDN(cli, name)
+
+		filter := ""
+		if g := strings.TrimSpace(svcGrantMembersOf); g != "" {
+			if !strings.Contains(g, "=") { // a bare name -> resolve to its DN
+				e, ferr := cli.FindGroup(g, []string{"cn"})
+				if ferr != nil {
+					return ferr
+				}
+				g = e.DN
+			}
+			filter = "(memberOf=" + g + ")"
+		}
+
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+
+		who := acl.DNWho(sa)
+		steps := []acl.InjectOpts{
+			{Target: tree, Scope: "base", Who: who, Access: "search"},
+			{Target: tree, Scope: "subtree", Filter: filter, Who: who, Access: svcGrantAccess},
+		}
+		var rules []string
+		for _, step := range steps {
+			e, rerr := cc.ReadEntry(svcACLDB, []string{"olcAccess"})
+			if rerr != nil {
+				return rerr
+			}
+			// place it above whatever would shadow it (-1 = nothing does, append)
+			step.At = acl.ShadowIndex(e.GetAll("olcAccess"), step)
+			rule, _, ierr := cc.InjectAccess(svcACLDB, step)
+			if ierr != nil {
+				return fmt.Errorf("grant on %s: %w", svcACLDB, ierr)
+			}
+			if rule == "" {
+				rule = "(already granted, unchanged)"
+			}
+			rules = append(rules, rule)
+		}
+		log.Debug().Str("sa", sa).Str("tree", tree).Str("filter", filter).Msg("svc grant-read")
+		return out.Emit(okResult{
+			Action: "granted " + svcGrantAccess + " on " + tree + " to " + name + " via",
+			DN:     svcACLDB,
+			Detail: strings.Join(rules, "\n  "),
+		})
+	},
+}
+
 // ---- add ----------------------------------------------------------------
 
 var (
@@ -305,7 +397,10 @@ func init() {
 	svcAddCmd.Flags().StringVar(&svcAddPassword, "password", "", "password (default: generate a 32-char one)")
 	svcPasswdCmd.Flags().StringVar(&svcPasswdValue, "password", "", "password (default: generate a 32-char one)")
 
-	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd)
+	svcGrantReadCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
+	svcGrantReadCmd.Flags().StringVar(&svcGrantMembersOf, "members-of", "", "only entries that are members of this group (name or DN) — least privilege")
+	svcGrantReadCmd.Flags().StringVar(&svcGrantAccess, "access", "read", "access level on the entries: read|search|write|…")
+	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantReadCmd)
 	rootCmd.AddCommand(svcCmd)
 
 	svcsCmd.AddCommand(svcListCmd) // listing is plural

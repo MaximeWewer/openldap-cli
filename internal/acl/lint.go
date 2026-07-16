@@ -130,6 +130,36 @@ func isNoOp(body string) bool {
 	return true
 }
 
+// ShadowIndex returns the index of the earliest existing rule that would shadow
+// a new rule with o's selector — one that matches the same entries first and
+// never breaks. That index is exactly where the new rule must be inserted to be
+// reachable. Returns -1 when nothing shadows it (safe to append at the end).
+func ShadowIndex(values []string, o InjectOpts) int {
+	target := parseSelector(o.selector())
+	type r struct {
+		idx int
+		sel selector
+		brk bool
+	}
+	rules := make([]r, 0, len(values))
+	for _, v := range values {
+		idx, body := SplitIndexed(v)
+		body = strings.TrimSpace(body)
+		s := body
+		if i := strings.Index(body, " by "); i >= 0 {
+			s = body[:i]
+		}
+		rules = append(rules, r{idx, parseSelector(s), hasBreak(body)})
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
+	for _, x := range rules {
+		if !x.brk && covers(x.sel, target) {
+			return x.idx
+		}
+	}
+	return -1
+}
+
 // Lint inspects an ordered olcAccess list and reports rules that can never fire.
 //
 // slapd stops at the FIRST rule whose `to` matches, so a rule is unreachable

@@ -122,6 +122,12 @@ func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 		if !ok || !strings.HasPrefix(strings.TrimSpace(rest), "by ") {
 			continue
 		}
+		// already granted -> no change (keeps re-runs idempotent)
+		for _, c := range byClauses(body) {
+			if strings.TrimSpace(c) == o.Who+" "+o.Access {
+				return Edit{}, false
+			}
+		}
 		var nb string
 		switch {
 		case strings.Contains(body, "by * none"):

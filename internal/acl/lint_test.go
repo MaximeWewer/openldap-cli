@@ -2,13 +2,13 @@ package acl
 
 import "testing"
 
-// the real prod case: a specific grant at {8} shadowed by the broad ou=groups
-// rule at {5} — the SA "had" read on cn=vcf-admin but the rule never fired.
-func TestLintDetectsRealShadowedRule(t *testing.T) {
+// the classic case: a specific grant at {8} shadowed by the broad ou=groups
+// rule at {5} — the SA "has" read on the group but the rule never fires.
+func TestLintDetectsShadowedRule(t *testing.T) {
 	values := []string{
 		`{0}to * by dn.exact="cn=replicator,dc=x" read by * break`,
 		`{5}to dn.subtree="ou=groups,dc=x" by dn.exact="cn=admin,dc=x" write by * none`,
-		`{8}to dn.subtree="cn=vcf-admin,ou=groups,dc=x" by dn.exact="cn=vcf,dc=x" read by * none`,
+		`{8}to dn.subtree="cn=admins,ou=groups,dc=x" by dn.exact="cn=app,dc=x" read by * none`,
 	}
 	f := Lint(values)
 	if len(f) != 1 {
@@ -26,7 +26,7 @@ func TestLintDetectsRealShadowedRule(t *testing.T) {
 func TestLintCleanWhenOrderedOrBreaking(t *testing.T) {
 	// specific rule placed ABOVE the broad one -> reachable
 	ok := []string{
-		`{5}to dn.subtree="cn=vcf-admin,ou=groups,dc=x" by dn.exact="cn=vcf,dc=x" read by * break`,
+		`{5}to dn.subtree="cn=admins,ou=groups,dc=x" by dn.exact="cn=app,dc=x" read by * break`,
 		`{6}to dn.subtree="ou=groups,dc=x" by dn.exact="cn=admin,dc=x" write by * none`,
 	}
 	if f := Lint(ok); len(f) != 0 {
@@ -35,7 +35,7 @@ func TestLintCleanWhenOrderedOrBreaking(t *testing.T) {
 	// broad rule breaks -> the later specific rule is still reachable
 	brk := []string{
 		`{5}to dn.subtree="ou=groups,dc=x" by dn.exact="cn=admin,dc=x" write by * break`,
-		`{8}to dn.subtree="cn=vcf-admin,ou=groups,dc=x" by dn.exact="cn=vcf,dc=x" read by * none`,
+		`{8}to dn.subtree="cn=admins,ou=groups,dc=x" by dn.exact="cn=app,dc=x" read by * none`,
 	}
 	if f := Lint(brk); len(f) != 0 {
 		t.Errorf("break should keep {8} reachable, got %+v", f)
@@ -102,4 +102,24 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+func TestShadowIndexPicksTheBlockingRule(t *testing.T) {
+	values := []string{
+		`{0}to * by dn.exact="cn=repl,dc=x" read by * break`, // breaks -> not a blocker
+		`{5}to dn.subtree="ou=groups,dc=x" by dn.exact="cn=admin,dc=x" write by * none`,
+		`{6}to dn.subtree="ou=users,dc=x" by self write by * none`,
+	}
+	// a rule on cn=g,ou=groups is shadowed by {5} -> must be inserted at 5
+	if got := ShadowIndex(values, InjectOpts{Target: "cn=g,ou=groups,dc=x", Who: DNWho("cn=a,dc=x"), Access: "read"}); got != 5 {
+		t.Errorf("ShadowIndex = %d, want 5", got)
+	}
+	// a rule on ou=users is shadowed by {6}
+	if got := ShadowIndex(values, InjectOpts{Target: "ou=users,dc=x", Who: DNWho("cn=a,dc=x"), Access: "read"}); got != 6 {
+		t.Errorf("ShadowIndex = %d, want 6", got)
+	}
+	// nothing covers an unrelated tree -> append
+	if got := ShadowIndex(values, InjectOpts{Target: "ou=other,dc=x", Who: DNWho("cn=a,dc=x"), Access: "read"}); got != -1 {
+		t.Errorf("ShadowIndex = %d, want -1", got)
+	}
 }

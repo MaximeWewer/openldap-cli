@@ -11,6 +11,9 @@ func (c *Client) InjectAccess(dbDN string, o acl.InjectOpts) (rule string, appen
 		return "", false, err
 	}
 	edit, appended := acl.Inject(e.GetAll("olcAccess"), o)
+	if edit.Add == "" && edit.Delete == "" {
+		return "", false, nil // the clause is already present — nothing to change
+	}
 	var mods []Mod
 	if edit.Delete != "" {
 		mods = append(mods, Mod{Op: ModDelete, Name: "olcAccess", Values: []string{edit.Delete}})
