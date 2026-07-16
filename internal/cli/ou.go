@@ -6,6 +6,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+
+	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
 var ouCmd = &cobra.Command{
@@ -13,7 +15,23 @@ var ouCmd = &cobra.Command{
 	Short: "Manage organizational units",
 }
 
-var ouCreateParent string
+// ouParent backs the --parent flag of every ou subcommand (only one ever runs).
+var ouParent string
+
+// ouDN builds ou=<name>,<parent>, defaulting the parent to the base DN.
+func ouDN(name string) (string, error) {
+	parent := strings.TrimSpace(ouParent)
+	if parent == "" {
+		cfg, err := loadConfig()
+		if err != nil {
+			return "", err
+		}
+		parent = cfg.BaseDN
+	}
+	return "ou=" + strings.TrimSpace(name) + "," + parent, nil
+}
+
+// ---- create -------------------------------------------------------------
 
 var ouCreateCmd = &cobra.Command{
 	Use:   "create <name>",
@@ -24,22 +42,16 @@ var ouCreateCmd = &cobra.Command{
 		"  openldap-cli ou create eu --parent ou=users,dc=example,dc=org",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := strings.TrimSpace(args[0])
-		cfg, err := loadConfig()
+		dn, err := ouDN(name)
 		if err != nil {
 			return err
 		}
-		parent := strings.TrimSpace(ouCreateParent)
-		if parent == "" {
-			parent = cfg.BaseDN
-		}
-
 		cli, err := connect()
 		if err != nil {
 			return err
 		}
 		defer cli.Close()
 
-		dn := "ou=" + name + "," + parent
 		attrs := map[string][]string{
 			"objectClass": {"top", "organizationalUnit"},
 			"ou":          {name},
@@ -51,6 +63,8 @@ var ouCreateCmd = &cobra.Command{
 		return out.Emit(okResult{Action: "created", DN: dn})
 	},
 }
+
+// ---- list / info --------------------------------------------------------
 
 var ouListCmd = &cobra.Command{
 	Use:   "list",
@@ -70,7 +84,108 @@ var ouListCmd = &cobra.Command{
 	},
 }
 
-var ouDeleteParent string
+var ouInfoCmd = &cobra.Command{
+	Use:     "info <name>",
+	Aliases: []string{"show", "get"},
+	Short:   "Show an organizational unit",
+	Args:    cobra.ExactArgs(1),
+	Example: "  openldap-cli ou info users\n" +
+		"  openldap-cli ou info eu --parent ou=users,dc=example,dc=org",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dn, err := ouDN(args[0])
+		if err != nil {
+			return err
+		}
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		e, err := cli.ReadEntry(dn, nil)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", dn, err)
+		}
+		return out.Emit(newEntryResult(e))
+	},
+}
+
+// ---- set ----------------------------------------------------------------
+
+var ouSetCmd = &cobra.Command{
+	Use:   "set <name> <attr> [value...]",
+	Short: "Replace (or delete, if no value) a single attribute on an OU",
+	Args:  cobra.MinimumNArgs(2),
+	Example: "  openldap-cli ou set contractors description 'External staff'\n" +
+		"  openldap-cli ou set contractors description                    # delete attribute",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dn, err := ouDN(args[0])
+		if err != nil {
+			return err
+		}
+		attr, values := args[1], args[2:]
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+
+		mod := ldapx.Mod{Op: ldapx.ModReplace, Name: attr, Values: values}
+		action := "set " + attr + " on"
+		if len(values) == 0 {
+			mod.Op = ldapx.ModDelete
+			action = "deleted " + attr + " on"
+		}
+		if err := cli.Modify(dn, []ldapx.Mod{mod}); err != nil {
+			return fmt.Errorf("modify %s: %w", dn, err)
+		}
+		log.Debug().Str("dn", dn).Str("attr", attr).Msg("ou attribute modified")
+		return out.Emit(okResult{Action: action, DN: dn})
+	},
+}
+
+// ---- rename -------------------------------------------------------------
+
+var ouRenameCmd = &cobra.Command{
+	Use:   "rename <name> <new-name>",
+	Short: "Rename an OU (modrdn); entries below it follow",
+	Long: "Renames ou=<name> to ou=<new-name> under the same parent. The entries\n" +
+		"below it keep their place and their DNs follow the new name.\n\n" +
+		"olcAccess is NOT rewritten: any rule naming the old DN (its own, or one of\n" +
+		"the entries under it) stops matching silently. Rules that do are listed as\n" +
+		"a warning — re-grant them against the new DN.\n\n" +
+		"To move an OU under a different parent, use `entry rename --newsuperior`.",
+	Args:    cobra.ExactArgs(2),
+	Example: "  openldap-cli ou rename contractors externals",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dn, err := ouDN(args[0])
+		if err != nil {
+			return err
+		}
+		newName := strings.TrimSpace(args[1])
+		if newName == "" {
+			return fmt.Errorf("the new name is empty")
+		}
+		newDN, err := ouDN(newName)
+		if err != nil {
+			return err
+		}
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+
+		// deleteOldRDN: the old ou value must go, or the entry keeps both names
+		if err := cli.Rename(dn, "ou="+newName, true, ""); err != nil {
+			return fmt.Errorf("rename %s: %w", dn, err)
+		}
+		log.Debug().Str("from", dn).Str("to", newDN).Msg("ou renamed")
+		warnStaleACLRefs(dn)
+		return out.Emit(okResult{Action: "renamed to", DN: newDN})
+	},
+}
+
+// ---- delete -------------------------------------------------------------
 
 var ouDeleteCmd = &cobra.Command{
 	Use:     "delete <name>",
@@ -78,20 +193,15 @@ var ouDeleteCmd = &cobra.Command{
 	Short:   "Delete an organizational unit (must be empty)",
 	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := loadConfig()
+		dn, err := ouDN(args[0])
 		if err != nil {
 			return err
-		}
-		parent := strings.TrimSpace(ouDeleteParent)
-		if parent == "" {
-			parent = cfg.BaseDN
 		}
 		cli, err := connect()
 		if err != nil {
 			return err
 		}
 		defer cli.Close()
-		dn := "ou=" + strings.TrimSpace(args[0]) + "," + parent
 		if err := cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}
@@ -101,8 +211,9 @@ var ouDeleteCmd = &cobra.Command{
 }
 
 func init() {
-	ouCreateCmd.Flags().StringVar(&ouCreateParent, "parent", "", "parent DN (default: base DN)")
-	ouDeleteCmd.Flags().StringVar(&ouDeleteParent, "parent", "", "parent DN (default: base DN)")
-	ouCmd.AddCommand(ouCreateCmd, ouListCmd, ouDeleteCmd)
+	for _, c := range []*cobra.Command{ouCreateCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd} {
+		c.Flags().StringVar(&ouParent, "parent", "", "parent DN (default: base DN)")
+	}
+	ouCmd.AddCommand(ouCreateCmd, ouListCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd)
 	rootCmd.AddCommand(ouCmd)
 }

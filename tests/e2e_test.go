@@ -88,9 +88,13 @@ func cleanup() {
 		try(admin, adPW, "user", "delete", u)
 	}
 	try(admin, adPW, "group", "delete", "e2e.devs")
+	try(admin, adPW, "group", "delete", "e2e.eng") // a failed rename subtest leaves this name
 	try(admin, adPW, "svc", "revoke", "e2e.svc") // a failed svc subtest would leave its grants behind
 	try(admin, adPW, "svc", "delete", "e2e.svc")
-	try(admin, adPW, "ou", "delete", "e2e.unit", "--parent", "ou=users,dc=example,dc=org")
+	for _, o := range []string{"e2e.unit", "e2e.renamed"} {
+		try(admin, adPW, "entry", "delete", "cn=e2e.kid,ou="+o+",ou=users,dc=example,dc=org")
+		try(admin, adPW, "ou", "delete", o, "--parent", "ou=users,dc=example,dc=org")
+	}
 	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
 	// a failed overlay subtest would otherwise leave it enabled
 	try(admin, adPW, "config", "overlay", "disable", "constraint", "--purge")
@@ -149,6 +153,16 @@ func TestCLI(t *testing.T) {
 		run(t, admin, adPW, "group", "add-member", "e2e.devs", "user1.name")
 		has(t, run(t, admin, adPW, "groups", "list"), "e2e.devs")
 		run(t, admin, adPW, "group", "remove-member", "e2e.devs", "user1.name")
+		has(t, run(t, admin, adPW, "group", "set", "e2e.devs", "description", "Core team"), "set description on")
+		has(t, run(t, admin, adPW, "group", "info", "e2e.devs"), "Core team")
+		has(t, run(t, admin, adPW, "group", "set", "e2e.devs", "description"), "deleted description on")
+		// rename and back: members ride along, and the old cn must not linger
+		has(t, run(t, admin, adPW, "group", "rename", "e2e.devs", "e2e.eng"), "cn=e2e.eng")
+		has(t, run(t, admin, adPW, "group", "info", "e2e.eng"), "e2e.beta")
+		if _, _, gerr := try(admin, adPW, "group", "info", "e2e.devs"); gerr == nil {
+			t.Error("group info: the old name still resolves after a rename")
+		}
+		run(t, admin, adPW, "group", "rename", "e2e.eng", "e2e.devs")
 	})
 
 	t.Run("bulk", func(t *testing.T) {
@@ -196,7 +210,16 @@ func TestCLI(t *testing.T) {
 		parent := "ou=users,dc=example,dc=org"
 		has(t, run(t, admin, adPW, "ou", "create", "e2e.unit", "--parent", parent), "created")
 		has(t, run(t, admin, adPW, "ou", "list"), "e2e.unit")
-		run(t, admin, adPW, "ou", "delete", "e2e.unit", "--parent", parent)
+		has(t, run(t, admin, adPW, "ou", "info", "e2e.unit", "--parent", parent), "ou=e2e.unit,"+parent)
+		has(t, run(t, admin, adPW, "ou", "set", "e2e.unit", "description", "External staff", "--parent", parent), "set description on")
+		has(t, run(t, admin, adPW, "ou", "info", "e2e.unit", "--parent", parent), "External staff")
+		has(t, run(t, admin, adPW, "ou", "set", "e2e.unit", "description", "--parent", parent), "deleted description on")
+		// rename with a child: the child's DN must follow the new parent name
+		run(t, admin, adPW, "entry", "add", "cn=e2e.kid,ou=e2e.unit,"+parent, "objectClass=device", "objectClass=top", "cn=e2e.kid")
+		has(t, run(t, admin, adPW, "ou", "rename", "e2e.unit", "e2e.renamed", "--parent", parent), "ou=e2e.renamed,"+parent)
+		has(t, run(t, admin, adPW, "search", "(cn=e2e.kid)"), "cn=e2e.kid,ou=e2e.renamed,"+parent)
+		run(t, admin, adPW, "entry", "delete", "cn=e2e.kid,ou=e2e.renamed,"+parent)
+		run(t, admin, adPW, "ou", "delete", "e2e.renamed", "--parent", parent)
 	})
 
 	t.Run("ppolicy", func(t *testing.T) {

@@ -164,6 +164,83 @@ func groupMemberRunE(add bool) func(*cobra.Command, []string) error {
 	}
 }
 
+// ---- set ----------------------------------------------------------------
+
+var groupSetCmd = &cobra.Command{
+	Use:   "set <name> <attr> [value...]",
+	Short: "Replace (or delete, if no value) a single attribute on a group",
+	Long: "Use `add-member`/`remove-member` for membership: this replaces the whole\n" +
+		"attribute, so `set <g> member <dn>` would drop every other member.",
+	Args: cobra.MinimumNArgs(2),
+	Example: "  openldap-cli group set devs description 'Core team'\n" +
+		"  openldap-cli group set devs description                    # delete attribute",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		attr, values := args[1], args[2:]
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+
+		g, err := cli.FindGroup(strings.TrimSpace(args[0]), []string{"cn"})
+		if err != nil {
+			return err
+		}
+		mod := ldapx.Mod{Op: ldapx.ModReplace, Name: attr, Values: values}
+		action := "set " + attr + " on"
+		if len(values) == 0 {
+			mod.Op = ldapx.ModDelete
+			action = "deleted " + attr + " on"
+		}
+		if err := cli.Modify(g.DN, []ldapx.Mod{mod}); err != nil {
+			return fmt.Errorf("modify %s: %w", g.DN, err)
+		}
+		log.Debug().Str("dn", g.DN).Str("attr", attr).Msg("group attribute modified")
+		return out.Emit(okResult{Action: action, DN: g.DN})
+	},
+}
+
+// ---- rename -------------------------------------------------------------
+
+var groupRenameCmd = &cobra.Command{
+	Use:   "rename <name> <new-name>",
+	Short: "Rename a group (cn modrdn)",
+	Long: "Renames cn=<name> to cn=<new-name>. Members are untouched, and their\n" +
+		"memberOf follows the new DN (the memberof overlay maintains it).\n\n" +
+		"olcAccess is NOT rewritten: a rule granting `group.exact=\"cn=<name>,…\"`\n" +
+		"keeps naming the old DN and silently stops matching, so every member loses\n" +
+		"that access. Rules that do are listed as a warning — re-grant them with\n" +
+		"`config acl grant --group <new-name>` and revoke the old clause by passing\n" +
+		"its full old DN to `config acl revoke --group` (the old name no longer\n" +
+		"resolves).",
+	Args:    cobra.ExactArgs(2),
+	Example: "  openldap-cli group rename devs engineers",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		newName := strings.TrimSpace(args[1])
+		if newName == "" {
+			return fmt.Errorf("the new name is empty")
+		}
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+
+		g, err := cli.FindGroup(strings.TrimSpace(args[0]), []string{"cn"})
+		if err != nil {
+			return err
+		}
+		// deleteOldRDN: the old cn must go, or the group answers to both names
+		if err := cli.Rename(g.DN, "cn="+newName, true, ""); err != nil {
+			return fmt.Errorf("rename %s: %w", g.DN, err)
+		}
+		newDN := "cn=" + newName + "," + cli.GroupBase()
+		log.Debug().Str("from", g.DN).Str("to", newDN).Msg("group renamed")
+		warnStaleACLRefs(g.DN)
+		return out.Emit(okResult{Action: "renamed to", DN: newDN})
+	},
+}
+
 // ---- delete / info ------------------------------------------------------
 
 var groupDeleteCmd = &cobra.Command{
@@ -212,7 +289,7 @@ func init() {
 	groupCreateCmd.Flags().StringArrayVar(&groupCreateMembers, "member", nil, "member login (repeatable)")
 	groupListCmd.Flags().BoolVar(&groupListMembers, "members", false, "include member DNs")
 	groupCmd.AddCommand(groupCreateCmd, groupAddMemberCmd, groupRemoveMemberCmd,
-		groupDeleteCmd, groupInfoCmd)
+		groupSetCmd, groupRenameCmd, groupDeleteCmd, groupInfoCmd)
 	rootCmd.AddCommand(groupCmd)
 
 	groupsCmd.AddCommand(groupListCmd) // listing is plural

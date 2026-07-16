@@ -210,8 +210,12 @@ aborts on the first failure (default: continue, per-item result).
 | `group create <name> --member <login> …`              | groupOfNames needs ≥1 member                   |
 | `group info <name>`                                   | (listing is `groups list`)                     |
 | `group add-member <group> <login…>` / `remove-member` | removing the last member violates groupOfNames |
+| `group set <name> <attr> [value…]`                    | replace an attribute (no value deletes it). Use `add-member` for membership — this replaces the whole attribute |
+| `group rename <name> <new-name>`                      | `cn` modrdn. `memberOf` follows, **`olcAccess` does not**: a `group.exact="cn=<old>,…"` grant silently stops matching (warned about — see Gotchas) |
 | `group delete <name>`                                 |                                                |
 | `ou create <name> [--parent DN]`                      | parent must be ACL-writable by your bind       |
+| `ou info <name> [--parent]` / `ou set <name> <attr> [value…]` | read an OU / replace an attribute (no value deletes it) |
+| `ou rename <name> <new-name> [--parent]`              | `ou` modrdn; entries below it follow. Same `olcAccess` caveat as `group rename`. To change parent, use `entry rename --newsuperior` |
 | `ou list` / `ou delete <name> [--parent]`             | delete refuses a non-empty OU                  |
 
 ### ppolicy (writes to `ou=policies` need a rootDN bind)
@@ -328,6 +332,16 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   `by <who>` clause into the existing rule (multiple `by` clauses coexist, one
   per identity). For many/rotating accounts, grant a **group** once
   (`--group readers`) and manage membership — no ACL edits per account.
+- **A rename silently breaks the ACLs naming the old DN.** slapd rewrites
+  nothing in `olcAccess`: after `group rename devs engineers`, a rule granting
+  `group.exact="cn=devs,…"` still names a DN that no longer exists, so it stops
+  matching and every member loses that access **with no error anywhere**. Same
+  for `ou rename` and rules naming the OU or the entries under it. (`memberOf`
+  is fine — the memberof overlay maintains it across a rename.) `group rename` /
+  `ou rename` list the affected rules as a warning; re-grant them against the new
+  DN. To revoke the stale clause, pass its **full old DN** —
+  `config acl revoke --group 'cn=devs,ou=groups,dc=example,dc=org'` — because the
+  old *name* no longer resolves to anything.
 - **Generated passwords adapt to the policy.** `user passwd` / `user add` /
   `users passwd` size the generated password to the effective `pwdMinLength`
   (resolved from the user's `pwdPolicySubentry`, the overlay `olcPPolicyDefault`
@@ -410,11 +424,17 @@ openldap-cli group add-member devs demo1
 openldap-cli group info devs
 openldap-cli groups list
 openldap-cli group remove-member devs demo1
-openldap-cli group delete devs
+openldap-cli group set devs description 'Core team'
+openldap-cli group set devs description                    # no value = delete it
+openldap-cli group rename devs engineers                  # warns about ACLs naming cn=devs
+openldap-cli group delete engineers
 
 openldap-cli ou create contractors --parent ou=users,dc=example,dc=org
 openldap-cli ou list
-openldap-cli ou delete contractors --parent ou=users,dc=example,dc=org
+openldap-cli ou info contractors --parent ou=users,dc=example,dc=org
+openldap-cli ou set contractors description 'External staff' --parent ou=users,dc=example,dc=org
+openldap-cli ou rename contractors externals --parent ou=users,dc=example,dc=org  # children follow
+openldap-cli ou delete externals --parent ou=users,dc=example,dc=org
 ```
 
 ### Bulk (plural scopes)
