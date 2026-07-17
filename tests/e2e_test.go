@@ -421,7 +421,11 @@ func TestCLI(t *testing.T) {
 
 		dump := tmpFile(t, run(t, admin, adPW, "users", "export", "--with-hash"))
 		run(t, admin, adPW, "user", "delete", "e2e.rt")
-		has(t, run(t, admin, adPW, "users", "import", dump), "+ cn=e2e.rt,ou=users")
+		// the dump holds every user, so re-importing it onto the still-populated
+		// tree re-creates e2e.rt and reports the others as "already exists" — a
+		// non-zero exit is correct there. What matters is e2e.rt came back.
+		imp, _, _ := try(admin, adPW, "users", "import", dump)
+		has(t, imp, "+ cn=e2e.rt,ou=users")
 
 		got := run(t, admin, adPW, "user", "info", "e2e.rt")
 		// every column must land where it came from — not one to the left
@@ -511,11 +515,14 @@ func TestCLI(t *testing.T) {
 		run(t, admin, adPW, "user", "set", "e2e.gamma", "mail", "a@example.org", "--force")
 		run(t, admin, adPW, "entry", "set", "cn=e2e.gamma,ou=users,dc=example,dc=org",
 			"mail", "--add", "b@example.org")
-		// A batch reports per-item failures in its RESULT and still exits 0 (see
-		// the partial-delete case below), so the refusal shows up there — not as
-		// a non-zero exit.
-		out := run(t, admin, adPW, "users", "set", "mail", "only@example.org", "e2e.gamma")
-		has(t, out, "0 ok, 1 failed")
+		// A batch reports per-item failures in its RESULT (on stdout) AND exits
+		// non-zero, so a script can trust the exit code. The refusal is one such
+		// failure.
+		out, _, err := try(admin, adPW, "users", "set", "mail", "only@example.org", "e2e.gamma")
+		if err == nil {
+			t.Error("users set with a refused item exited 0")
+		}
+		has(t, out, "0 ok, 1 failed") // the report is still on stdout
 		has(t, out, "would delete")
 		// `entry get`, not `user info`: user info renders one value per attribute,
 		// so it cannot show whether the second mail survived
@@ -529,10 +536,19 @@ func TestCLI(t *testing.T) {
 			t.Errorf("--force did not replace:\n%s", got)
 		}
 
-		// partial bulk delete: one existing + one missing -> per-item, not abort
-		out = run(t, admin, adPW, "users", "delete", "e2e.delta", "e2e.ghost.missing")
+		// partial bulk delete: one existing + one missing -> per-item, not abort,
+		// but a named login that could not be acted on still makes the exit
+		// non-zero (the report stays on stdout)
+		out, _, err = try(admin, adPW, "users", "delete", "e2e.delta", "e2e.ghost.missing")
+		if err == nil {
+			t.Error("partial batch delete exited 0 despite a failed item")
+		}
 		has(t, out, "1 ok, 1 failed")
 		has(t, out, "e2e.ghost.missing")
+
+		// all-succeed stays exit 0
+		run(t, admin, adPW, "user", "add", "e2e.exit0", "--no-password")
+		run(t, admin, adPW, "users", "delete", "e2e.exit0")
 	})
 
 	t.Run("svc", func(t *testing.T) {
@@ -986,8 +1002,11 @@ func TestCLI(t *testing.T) {
 
 		run(t, admin, adPW, "user", "delete", "e2e.bak")
 		// restore binds as rootDN: the Relax control (to re-add a userPassword
-		// under a strict ppolicy) is only honored for the rootDN.
-		has(t, run(t, root, rtPW, "backup", "restore", gz), "imported")
+		// under a strict ppolicy) is only honored for the rootDN. The gz is a
+		// full-tree dump, so restoring it onto the live tree re-adds e2e.bak and
+		// reports the rest as "already exists" — non-zero exit, which is honest.
+		rst, _, _ := try(root, rtPW, "backup", "restore", gz)
+		has(t, rst, "imported")
 		has(t, run(t, admin, adPW, "user", "info", "e2e.bak"), "e2e.bak")
 
 		// A dump carries only what the bind can read, so it must say whether it

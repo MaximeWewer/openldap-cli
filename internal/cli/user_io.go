@@ -123,7 +123,7 @@ var userImportCmd = &cobra.Command{
 			}
 		}
 		log.Debug().Int("created", len(res.Created)).Int("failed", len(res.Failed)).Msg("import done")
-		return out.Emit(res)
+		return emitBatch(res, len(res.Failed), len(res.Created)+len(res.Failed))
 	},
 }
 

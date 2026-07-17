@@ -6,7 +6,27 @@ import (
 	"strings"
 
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
+	"github.com/MaximeWewer/openldap-cli/internal/output"
 )
+
+// emitBatch writes a batch result and, when any item failed, returns an error so
+// the process exits non-zero.
+//
+// The result is already on stdout for a consumer to parse; the returned error
+// only sets the exit status and puts a summary on stderr. A batch that prints
+// "N failed" yet exits 0 lets a script read a total failure as success — and the
+// point of a batch is that its exit code can be trusted. A login the caller
+// named but that could not be acted on counts as failed: not doing what was
+// asked is not a success, even when the entry was simply already gone.
+func emitBatch(res output.Renderable, failed, total int) error {
+	if err := out.Emit(res); err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d of %d failed — see the report above", failed, total)
+	}
+	return nil
+}
 
 // ---- shared renderers ---------------------------------------------------
 

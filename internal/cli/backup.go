@@ -118,7 +118,7 @@ var backupRestoreCmd = &cobra.Command{
 			res.Created = append(res.Created, e.DN)
 		}
 		log.Debug().Int("restored", len(res.Created)).Int("failed", len(res.Failed)).Msg("restore done")
-		return out.Emit(res)
+		return emitBatch(res, len(res.Failed), len(res.Created)+len(res.Failed))
 	},
 }
 

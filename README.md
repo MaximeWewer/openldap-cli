@@ -206,6 +206,15 @@ Selectors (`--group`/`--filter`/`--all-locked`) require **`--yes`** (they print
 the match count and refuse otherwise); explicit logins don't. `--stop-on-error`
 aborts on the first failure (default: continue, per-item result).
 
+Every bulk verb (`users`/`groups`/`svcs` delete/set/passwd/…, `users import`,
+`backup restore`, `import-ldif`) **exits non-zero if any item failed** — the
+per-item report still goes to stdout for a script to parse, the summary and the
+exit status to stderr. A named target that could not be acted on (already gone,
+already exists, refused) counts as a failure, so a job never reads a partial or
+total failure as success. Restoring a full-tree dump onto a populated tree is a
+case of this: the entries that already exist are reported and the exit is
+non-zero.
+
 ### group / ou
 
 | Command                                               | Notes                                          |

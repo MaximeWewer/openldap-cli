@@ -144,7 +144,7 @@ func runUserBatch(action string, logins []string, sel *userSelectors, fn func(*l
 		res.OK = append(res.OK, t.DN)
 	}
 	log.Debug().Str("action", action).Int("ok", len(res.OK)).Int("failed", len(res.Failed)).Msg("bulk done")
-	return out.Emit(res)
+	return emitBatch(res, len(res.Failed), len(res.OK)+len(res.Failed))
 }
 
 // unlockEntry clears the lock (always deletable) and best-effort clears the
@@ -311,7 +311,7 @@ var usersPasswdCmd = &cobra.Command{
 			res.Results = append(res.Results, passwdItem{DN: t.DN, Password: p})
 		}
 		log.Debug().Int("ok", len(res.Results)).Int("failed", len(res.Failed)).Msg("bulk passwd done")
-		return out.Emit(res)
+		return emitBatch(res, len(res.Failed), len(res.Results)+len(res.Failed))
 	},
 }
 
@@ -343,7 +343,7 @@ var groupsDeleteCmd = &cobra.Command{
 			}
 			res.OK = append(res.OK, g.DN)
 		}
-		return out.Emit(res)
+		return emitBatch(res, len(res.Failed), len(res.OK)+len(res.Failed))
 	},
 }
 
@@ -379,7 +379,7 @@ var svcsDeleteCmd = &cobra.Command{
 			}
 			res.OK = append(res.OK, dn)
 		}
-		return out.Emit(res)
+		return emitBatch(res, len(res.Failed), len(res.OK)+len(res.Failed))
 	},
 }
 
