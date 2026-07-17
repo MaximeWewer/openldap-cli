@@ -86,6 +86,10 @@ var groupListCmd = &cobra.Command{
 			}
 			res.Groups = append(res.Groups, g)
 		}
+		// This listing only knows groupOfNames. What it left out belongs in the
+		// RESULT, not a log line: a `-o json` consumer and anyone running at a
+		// higher log level would otherwise read the count as "every group".
+		res.Skipped = cli.CountSkippedByType(cli.GroupBase(), "groupOfNames")
 		return out.Emit(res)
 	},
 }
@@ -98,12 +102,12 @@ type groupBrief struct {
 
 type groupListResult struct {
 	Groups []groupBrief `json:"groups" yaml:"groups"`
+	// Skipped counts the entries under the group base that are not
+	// groupOfNames, so the count cannot be read as "every group".
+	Skipped int `json:"skippedNotGroupOfNames,omitempty" yaml:"skippedNotGroupOfNames,omitempty"`
 }
 
 func (r groupListResult) Text() string {
-	if len(r.Groups) == 0 {
-		return "no groups"
-	}
 	var b strings.Builder
 	for _, g := range r.Groups {
 		fmt.Fprintf(&b, "%s\n", g.CN)
@@ -111,7 +115,15 @@ func (r groupListResult) Text() string {
 			fmt.Fprintf(&b, "    %s\n", m)
 		}
 	}
-	fmt.Fprintf(&b, "(%d groups)", len(r.Groups))
+	if len(r.Groups) == 0 {
+		b.WriteString("no groups\n")
+	} else {
+		fmt.Fprintf(&b, "(%d groups)\n", len(r.Groups))
+	}
+	if r.Skipped > 0 {
+		fmt.Fprintf(&b, "%d more entrie(s) under the group base are not groupOfNames and are not listed"+
+			" (posixGroup, groupOfUniqueNames, …) — `search` shows them", r.Skipped)
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 

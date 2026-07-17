@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -184,16 +185,73 @@ func (c *Client) ReadEntry(dn string, attrs []string) (*Entry, error) {
 	return es[0], nil
 }
 
+// The typed commands are deliberately opinionated: groups are groupOfNames,
+// users are inetOrgPerson. But an entry that exists and is simply of another
+// type is not "not found" — telling an operator their group is missing when it
+// is right there sends them looking in the wrong place. So when the typed lookup
+// misses, we ask again without the objectClass and report what is actually
+// there.
+
+// CountSkippedByType returns how many entries sit directly under base that the
+// typed filter (objectClass=want) leaves out.
+//
+// A listing that says "(2 groups)" when four entries live under ou=groups is
+// making a claim about the directory, not about its own filter. Callers use this
+// to say what they did not show.
+func (c *Client) CountSkippedByType(base, want string) int {
+	all, err := c.search(base, ldap.ScopeSingleLevel, "(objectClass=*)", []string{"objectClass"}, 0)
+	if err != nil {
+		return 0 // best effort: a listing must not fail over its own footnote
+	}
+	skipped := 0
+	for _, e := range all {
+		match := false
+		for _, oc := range e.GetAll("objectClass") {
+			if strings.EqualFold(oc, want) {
+				match = true
+				break
+			}
+		}
+		if !match {
+			skipped++
+		}
+	}
+	return skipped
+}
+
+// notOfType explains a miss: it re-runs match under base with no objectClass
+// constraint and, if something answers, names its type instead of denying it
+// exists. want is the objectClass the caller needs, kind the noun for messages.
+func (c *Client) notOfType(kind, name, base, match, want string) error {
+	es, err := c.search(base, ldap.ScopeWholeSubtree, match, []string{"objectClass"}, 0)
+	if err != nil || len(es) == 0 {
+		return fmt.Errorf("%s %q not found under %s", kind, name, base)
+	}
+	e := es[0]
+	// drop the abstract/structural scaffolding: the specific classes are what
+	// tell the operator what they are actually looking at
+	var classes []string
+	for _, oc := range e.GetAll("objectClass") {
+		if !strings.EqualFold(oc, "top") {
+			classes = append(classes, oc)
+		}
+	}
+	return fmt.Errorf("%s %q exists (%s) but its objectClass is %s, not %s.\n"+
+		"  the typed %s commands only manage %s; use `entry`/`search` for the rest",
+		kind, name, e.DN, strings.Join(classes, "+"), want, kind, want)
+}
+
 // FindGroup locates a groupOfNames by cn under the group base.
 func (c *Client) FindGroup(name string, attrs []string) (*Entry, error) {
-	filter := fmt.Sprintf("(&(objectClass=groupOfNames)(cn=%s))", ldap.EscapeFilter(name))
+	esc := ldap.EscapeFilter(name)
+	filter := fmt.Sprintf("(&(objectClass=groupOfNames)(cn=%s))", esc)
 	es, err := c.search(c.groupBase(), ldap.ScopeWholeSubtree, filter, attrs, 0)
 	if err != nil {
 		return nil, err
 	}
 	switch len(es) {
 	case 0:
-		return nil, fmt.Errorf("group %q not found under %s", name, c.groupBase())
+		return nil, c.notOfType("group", name, c.groupBase(), fmt.Sprintf("(cn=%s)", esc), "groupOfNames")
 	case 1:
 		return es[0], nil
 	default:
@@ -204,15 +262,15 @@ func (c *Client) FindGroup(name string, attrs []string) (*Entry, error) {
 // FindUser locates a person by login, matching either uid or cn so it works
 // regardless of which RDN attribute the entry uses (nil attrs = all).
 func (c *Client) FindUser(login string, attrs []string) (*Entry, error) {
-	filter := fmt.Sprintf("(&(objectClass=inetOrgPerson)(|(uid=%s)(cn=%s)))",
-		ldap.EscapeFilter(login), ldap.EscapeFilter(login))
-	es, err := c.search(c.userBase(), ldap.ScopeWholeSubtree, filter, attrs, 0)
+	esc := ldap.EscapeFilter(login)
+	byName := fmt.Sprintf("(|(uid=%s)(cn=%s))", esc, esc)
+	es, err := c.search(c.userBase(), ldap.ScopeWholeSubtree, "(&(objectClass=inetOrgPerson)"+byName+")", attrs, 0)
 	if err != nil {
 		return nil, err
 	}
 	switch len(es) {
 	case 0:
-		return nil, fmt.Errorf("user %q not found under %s", login, c.userBase())
+		return nil, c.notOfType("user", login, c.userBase(), byName, "inetOrgPerson")
 	case 1:
 		return es[0], nil
 	default:

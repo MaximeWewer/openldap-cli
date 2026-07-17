@@ -343,6 +343,15 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **The typed commands only manage `groupOfNames` and `inetOrgPerson` — and say
+  so.** That is deliberate: `group add-member` writes `member`, which a
+  `groupOfUniqueNames` (`uniqueMember`) or a `posixGroup` (`memberUid`) would
+  reject. But an entry of another type is **not** missing, so `group`/`user`
+  commands no longer answer `not found` for it: they name its DN and its real
+  objectClass, and point at `entry`/`search`. Likewise `groups list` /
+  `users list` report how many entries under the base their filter left out —
+  in the result (`skippedNotGroupOfNames` in `-o json`), so a count is never
+  read as "this is everything".
 - **`set` replaces, it does not add — and the CLI stops you at the cliff.**
   On a single-valued attribute that is the point. On a multi-valued one
   (`olcAccess`, `olcLimits`, `olcModuleLoad`, `member`) naming one value deletes

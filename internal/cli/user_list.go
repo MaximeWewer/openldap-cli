@@ -59,6 +59,12 @@ var userListCmd = &cobra.Command{
 				Mail: e.Get("mail"), DN: e.DN,
 			})
 		}
+		// Only report the type gap on an unfiltered listing: with --group/--locked
+		// /--posix the caller asked for a subset, so a smaller count is the point.
+		// It goes in the RESULT, not a log line, so `-o json` sees it too.
+		if len(filters) == 1 {
+			list.Skipped = cli.CountSkippedByType(cli.UserBase(), "inetOrgPerson")
+		}
 		return out.Emit(list)
 	},
 }
@@ -72,18 +78,26 @@ type userBrief struct {
 
 type userListResult struct {
 	Users []userBrief `json:"users" yaml:"users"`
+	// Skipped counts the entries under the user base that are not
+	// inetOrgPerson, so the count cannot be read as "every user".
+	Skipped int `json:"skippedNotInetOrgPerson,omitempty" yaml:"skippedNotInetOrgPerson,omitempty"`
 }
 
 func (r userListResult) Text() string {
-	if len(r.Users) == 0 {
-		return "no users"
-	}
 	var b strings.Builder
 	for _, u := range r.Users {
 		fmt.Fprintf(&b, "%-24s %s\n", u.UID, u.DisplayName)
 	}
-	fmt.Fprintf(&b, "(%d users)", len(r.Users))
-	return b.String()
+	if len(r.Users) == 0 {
+		b.WriteString("no users\n")
+	} else {
+		fmt.Fprintf(&b, "(%d users)\n", len(r.Users))
+	}
+	if r.Skipped > 0 {
+		fmt.Fprintf(&b, "%d more entrie(s) under the user base are not inetOrgPerson and are not listed"+
+			" — `search` shows them", r.Skipped)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func init() {

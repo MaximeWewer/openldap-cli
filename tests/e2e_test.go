@@ -111,6 +111,45 @@ func TestCLI(t *testing.T) {
 	cleanup()
 	t.Cleanup(cleanup)
 
+	t.Run("wrong-type", func(t *testing.T) {
+		// The typed commands only manage groupOfNames / inetOrgPerson. An entry of
+		// another type is not "not found" — saying so sends the operator looking
+		// for something that is right there.
+		const gDN = "cn=e2e.legacy,ou=groups,dc=example,dc=org"
+		const uDN = "cn=e2e.legacyuser,ou=users,dc=example,dc=org"
+		run(t, root, rtPW, "entry", "add", gDN, "objectClass=top", "objectClass=groupOfUniqueNames",
+			"cn=e2e.legacy", "uniqueMember=cn=user1.name,ou=users,dc=example,dc=org")
+		defer try(root, rtPW, "entry", "delete", gDN)
+		run(t, root, rtPW, "entry", "add", uDN, "objectClass=top", "objectClass=person",
+			"cn=e2e.legacyuser", "sn=Legacy")
+		defer try(root, rtPW, "entry", "delete", uDN)
+
+		_, se, err := try(admin, adPW, "group", "info", "e2e.legacy")
+		if err == nil {
+			t.Error("group info on a groupOfUniqueNames unexpectedly succeeded")
+		}
+		for _, want := range []string{"exists (" + gDN, "groupOfUniqueNames", "not groupOfNames"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("wrong-type group error missing %q in:\n%s", want, se)
+			}
+		}
+		if _, se, err = try(admin, adPW, "user", "info", "e2e.legacyuser"); err == nil {
+			t.Error("user info on a plain person unexpectedly succeeded")
+		} else if !strings.Contains(se, "not inetOrgPerson") {
+			t.Errorf("wrong-type user error unclear:\n%s", se)
+		}
+		// a name that really is absent still reads as absent
+		if _, se, err = try(admin, adPW, "group", "info", "e2e.nosuch"); err == nil ||
+			!strings.Contains(se, "not found") {
+			t.Errorf("an absent group must still say not found: err=%v stderr=%s", err, se)
+		}
+		// The listings must own up to what their filter hides — in the RESULT, so
+		// it survives -o json and a raised log level.
+		has(t, run(t, admin, adPW, "groups", "list"), "not groupOfNames and are not listed")
+		has(t, run(t, admin, adPW, "users", "list"), "not inetOrgPerson and are not listed")
+		has(t, run(t, admin, adPW, "-o", "json", "groups", "list"), "skippedNotGroupOfNames")
+	})
+
 	t.Run("replace-guard", func(t *testing.T) {
 		// `set` REPLACES: on a multi-valued attribute it drops every value not
 		// passed. One `config set olcAccess '<rule>'` used to wipe every ACL on
