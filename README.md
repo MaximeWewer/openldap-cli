@@ -251,7 +251,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `ops db-stats`                                                         | per-DB entries + used/max size (human-readable) and page usage % (catch `MDB_MAP_FULL`) |
 | `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                                        |
 | `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                                  |
-| `ops who-can-write <dn>`                                               | `olcAccess` rules referencing a DN (read manually)                                      |
+| `ops who-can-write <dn> [--attr <name>]`                               | evaluate `olcAccess` for an entry the way slapd does (first matching rule decides, `by * break` falls through) and report who can write it. Says **CANNOT SAY** rather than guess at a rule needing the entry's attributes (`filter=`) or a regex |
 | `ops replication`                                                      | local `contextCSN`; multi-peer drift is HA-only                                         |
 | `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics)          |
 
@@ -361,6 +361,19 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **`ops who-can-write` answers from the rules alone — and says so when it
+  can't.** It evaluates `olcAccess` the way slapd documents it: rules in index
+  order, the first whose `to` matches decides, and identities it does not name
+  are denied *there* (slapd.access(5) terminates every rule with an implicit
+  `by * none stop`) rather than falling through. A rule ending in `by * break` —
+  what this CLI's own grants use — does hand the question on, and is followed.
+  Two things it cannot settle from the rules: a `filter=`, whose answer is in the
+  entry's own attributes, and a regex. It reports **CANNOT SAY** and names the
+  rule instead of guessing, because a confident wrong "nobody can write this" is
+  the kind of answer that ends up in a security review. For those, `slapacl -F
+  /etc/openldap/slapd.d -D <identity> -b <dn> <attr>/write` decides on the server.
+  Note the rootDN never appears in any rule — it bypasses access control
+  entirely, so it is reported separately, and always.
 - **`olcLimits` is that same trap, in a second attribute.** It is ordered too,
   and slapd "examines each clause in turn until it finds one that matches" — so a
   `*` clause above a per-identity one silently swallows it. It is quieter than
@@ -673,7 +686,8 @@ openldap-cli whoami                                         # who am I bound as?
 openldap-cli ops db-stats                                   # per-DB used/max size (human) — catch MAP_FULL
 openldap-cli ops monitor                                    # connections / ops / threads
 openldap-cli ops audit-binds --since 24h --user toto.titi
-openldap-cli ops who-can-write 'cn=admin,ou=users,dc=example,dc=org'
+openldap-cli ops who-can-write 'cn=toto.titi,ou=users,dc=example,dc=org'
+openldap-cli ops who-can-write 'cn=toto.titi,ou=users,dc=example,dc=org' --attr userPassword
 
 openldap-cli search '(mail=*@example.org)' --attrs uid,mail
 openldap-cli search '(uid=toto.titi)' --operational         # + entryUUID, pwdChangedTime, …

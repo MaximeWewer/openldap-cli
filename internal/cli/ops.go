@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldaptime"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
@@ -264,11 +265,24 @@ func (r auditResult) Text() string {
 
 // ---- who-can-write ------------------------------------------------------
 
+var whoCanAttr string
+
 var opsWhoCanWriteCmd = &cobra.Command{
 	Use:   "who-can-write <dn>",
-	Short: "Show olcAccess rules referencing a DN (manual interpretation)",
-	Long:  "Pure ACL retrieval + client-side filtering. Output is the raw matching\nrules — read them manually (manage > write > read).",
-	Args:  cobra.ExactArgs(1),
+	Short: "Evaluate olcAccess and report who can write an entry",
+	Long: "Walks the olcAccess rules of the database holding the DN, the way slapd\n" +
+		"does: in index order, stopping at the first rule whose `to` matches, because\n" +
+		"slapd.access(5) implicitly terminates every rule with `by * none stop` —\n" +
+		"an identity the rule does not name is denied there, it does not fall through.\n" +
+		"A rule ending in `by * break` does hand the question on, and is followed.\n\n" +
+		"A rule narrowed by `filter=` or a regex cannot be evaluated without the\n" +
+		"entry's own attributes or a regex engine; the evaluation stops and says so\n" +
+		"rather than guess. Rules narrowed to attributes decide only those, so ask\n" +
+		"about one with --attr.\n\n" +
+		"The rootDN is never subject to any of this and can always write.",
+	Args: cobra.ExactArgs(1),
+	Example: "  openldap-cli ops who-can-write cn=toto.titi,ou=users,dc=example,dc=org\n" +
+		"  openldap-cli ops who-can-write cn=toto.titi,ou=users,dc=example,dc=org --attr userPassword",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		target := strings.TrimSpace(args[0])
 		cc, err := connectConfig()
@@ -277,35 +291,137 @@ var opsWhoCanWriteCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		dbs, err := cc.Search("cn=config", "(olcAccess=*)", []string{"olcAccess"})
+		db, err := databaseFor(cc, target)
 		if err != nil {
-			return fmt.Errorf("read olcAccess: %w", err)
+			return err
 		}
-		res := aclMatchResult{Target: target}
-		for _, e := range dbs {
-			for _, v := range e.GetAll("olcAccess") {
-				if strings.Contains(v, target) {
-					res.Rules = append(res.Rules, e.DN+" :: "+v)
-				}
-			}
+		res := whoCanResult{
+			Target: target, Attr: whoCanAttr,
+			Database: db.dn, Suffix: db.suffix, RootDN: db.rootDN,
 		}
+		res.Decision = acl.WhoCan(db.access, target, whoCanAttr)
+		res.Write, res.Unreadable = res.Decision.WriteGrants()
 		return out.Emit(res)
 	},
 }
 
-type aclMatchResult struct {
-	Target string   `json:"target" yaml:"target"`
-	Rules  []string `json:"rules" yaml:"rules"`
+// aclDatabase is a database's ACL-relevant configuration.
+type aclDatabase struct {
+	dn     string
+	suffix string
+	rootDN string
+	access []string
 }
 
-func (r aclMatchResult) Text() string {
-	if len(r.Rules) == 0 {
-		return "no olcAccess rule references " + r.Target
+// databaseFor returns the database that answers for target: the one whose
+// olcSuffix is the longest suffix of it. Rules live per-database, so reading
+// every olcAccess in cn=config and matching by text — as this command used to —
+// reports rules from databases that never see the entry.
+//
+// The frontend's rules are appended: slapd.access(5) says "access controls
+// defined in the frontend are appended to all others", so they are the last word
+// when no database rule settles it.
+func databaseFor(cc *ldapx.Client, target string) (aclDatabase, error) {
+	es, err := cc.Search("cn=config", "(&(objectClass=olcDatabaseConfig)(olcSuffix=*))",
+		[]string{"olcSuffix", "olcAccess", "olcRootDN"})
+	if err != nil {
+		return aclDatabase{}, fmt.Errorf("locate the database holding %s: %w", target, err)
 	}
+	t := strings.ToLower(strings.TrimSpace(target))
+	var best aclDatabase
+	for _, e := range es {
+		for _, suf := range e.GetAll("olcSuffix") {
+			s := strings.ToLower(strings.TrimSpace(suf))
+			if t != s && !strings.HasSuffix(t, ","+s) {
+				continue
+			}
+			if len(s) <= len(best.suffix) {
+				continue // a more specific database already claimed it
+			}
+			best = aclDatabase{dn: e.DN, suffix: suf, rootDN: e.Get("olcRootDN"), access: e.GetAll("olcAccess")}
+		}
+	}
+	if best.dn == "" {
+		return aclDatabase{}, fmt.Errorf("no database in cn=config has a suffix covering %s", target)
+	}
+
+	fe, err := cc.ReadEntry("olcDatabase={-1}frontend,cn=config", []string{"olcAccess"})
+	if err == nil {
+		best.access = append(best.access, fe.GetAll("olcAccess")...)
+	}
+	return best, nil
+}
+
+type whoCanResult struct {
+	Target     string       `json:"target" yaml:"target"`
+	Attr       string       `json:"attr,omitempty" yaml:"attr,omitempty"`
+	Database   string       `json:"database" yaml:"database"`
+	Suffix     string       `json:"suffix" yaml:"suffix"`
+	RootDN     string       `json:"rootDN,omitempty" yaml:"rootDN,omitempty"`
+	Write      []acl.Grant  `json:"write,omitempty" yaml:"write,omitempty"`
+	Unreadable []acl.Grant  `json:"unreadable,omitempty" yaml:"unreadable,omitempty"`
+	Decision   acl.Decision `json:"decision" yaml:"decision"`
+}
+
+func (r whoCanResult) Text() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "rules referencing %s:\n", r.Target)
-	for _, rule := range r.Rules {
-		fmt.Fprintf(&b, "  %s\n", rule)
+	what := "the entry"
+	if r.Attr != "" {
+		what = r.Attr
+	}
+	fmt.Fprintf(&b, "%s (%s)\n  database: %s  [suffix %s]\n", r.Target, what, r.Database, r.Suffix)
+
+	if r.Decision.Undecidable != "" {
+		fmt.Fprintf(&b, "\n  CANNOT SAY — this rule decides for the entry, and settling it needs the\n"+
+			"  entry's own attributes (filter=) or a regex engine:\n\n    %s\n\n"+
+			"  Nothing below it was consulted, since it never gets the question.\n"+
+			"  `slapacl -F /etc/openldap/slapd.d -D <identity> -b %s <attr>/write`\n"+
+			"  answers it on the server, where the entry is.\n", r.Decision.Undecidable, r.Target)
+		if r.RootDN != "" {
+			fmt.Fprintf(&b, "\n  (%s is the rootDN and can write regardless.)\n", r.RootDN)
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	b.WriteString("\n  can write:\n")
+	if len(r.Write) == 0 {
+		b.WriteString("    (nobody)\n")
+	}
+	for _, g := range r.Write {
+		fmt.Fprintf(&b, "    %-42s %s\n", g.Who, g.Access)
+	}
+	if r.RootDN != "" {
+		fmt.Fprintf(&b, "    %-42s rootDN — bypasses every ACL\n", r.RootDN)
+	}
+
+	switch {
+	case len(r.Decision.Rules) == 0:
+		fmt.Fprintf(&b, "\n  No rule covers this entry, so nothing grants access to it and the\n"+
+			"  default is deny — only the rootDN gets in.\n")
+	default:
+		b.WriteString("\n  rules consulted, in order:\n")
+		for _, rule := range r.Decision.Rules {
+			fmt.Fprintf(&b, "    {%d} %s\n", rule.Index, rule.Rule)
+			if rule.FellThrough {
+				fmt.Fprintf(&b, "         ends in `by * break`: the rules below still got a say\n")
+			}
+		}
+		if r.Decision.Settled {
+			last := r.Decision.Rules[len(r.Decision.Rules)-1]
+			fmt.Fprintf(&b, "    {%d} settles it: an identity it does not name is denied here\n"+
+				"         (implicit `by * none stop`) and the rules below never run.\n", last.Index)
+		}
+	}
+
+	for _, g := range r.Unreadable {
+		fmt.Fprintf(&b, "\n  NOTE: could not read the access level of `by %s %s` — not counted.\n", g.Who, g.Access)
+	}
+	if len(r.Decision.AttrOnly) > 0 {
+		b.WriteString("\n  Rules covering this entry for NAMED ATTRIBUTES only — they decide those,\n" +
+			"  not the question above. Ask with --attr <name>:\n")
+		for _, s := range r.Decision.AttrOnly {
+			fmt.Fprintf(&b, "    %s\n", s)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -444,6 +560,8 @@ func init() {
 
 	opsAuditBindsCmd.Flags().StringVar(&auditSince, "since", "24h", "time window (e.g. 24h, 7d)")
 	opsAuditBindsCmd.Flags().StringVar(&auditUser, "user", "", "filter by user login")
+
+	opsWhoCanWriteCmd.Flags().StringVar(&whoCanAttr, "attr", "", "ask about one attribute (e.g. userPassword) rather than the entry")
 
 	opsCmd.AddCommand(opsDBStatsCmd, opsAccesslogPurgeCmd, opsAuditBindsCmd, opsWhoCanWriteCmd, opsReplicationCmd, opsMonitorCmd)
 	rootCmd.AddCommand(opsCmd)

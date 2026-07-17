@@ -82,6 +82,32 @@ func has(t *testing.T, s, sub string) {
 	}
 }
 
+// writeSection returns just the "can write:" block of `ops who-can-write`, so a
+// DN quoted in the rules listing below it is not mistaken for a verdict.
+func writeSection(out string) string {
+	_, rest, ok := strings.Cut(out, "can write:")
+	if !ok {
+		return ""
+	}
+	if end := strings.Index(rest, "\n\n"); end >= 0 {
+		return rest[:end]
+	}
+	return rest
+}
+
+// slapaclAllows asks slapd's own ACL evaluator, in the container, against the
+// same slapd.d the server is running from.
+func slapaclAllows(t *testing.T, identity, target, attr string) bool {
+	t.Helper()
+	cmd := exec.Command("docker", "exec", "openldap-test", "slapacl",
+		"-F", "/etc/openldap/slapd.d", "-D", identity, "-b", target, attr+"/write")
+	out, err := cmd.CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "DENIED") {
+		t.Fatalf("slapacl %s %s/%s: %v\n%s", identity, target, attr, err, out)
+	}
+	return strings.Contains(string(out), "ALLOWED")
+}
+
 func cleanup() {
 	// delete each individually — a single missing login would abort a variadic
 	// `users delete`, leaving the rest behind.
@@ -652,6 +678,54 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "ops", "db-stats"), "dc=example,dc=org")
 		has(t, run(t, admin, adPW, "ops", "monitor"), "connections")
 		has(t, run(t, admin, adPW, "ops", "who-can-write", admin), "dn.exact")
+	})
+
+	// The verdict has to match what slapd actually decides, so slapacl — slapd's
+	// own evaluator, running in the container against the same slapd.d — is the
+	// oracle. Anything else is grading my reading of the rules against itself.
+	t.Run("who-can-write", func(t *testing.T) {
+		target := "cn=e2e.beta,ou=users,dc=example,dc=org"
+		for _, c := range []struct {
+			identity string
+			attr     string
+		}{
+			{admin, "sn"},
+			{"cn=phpldapadmin,ou=service-accounts,dc=example,dc=org", "sn"},
+			{"cn=ssp,ou=service-accounts,dc=example,dc=org", "sn"},
+			{"cn=e2e.alpha,ou=users,dc=example,dc=org", "sn"},
+			{admin, "userPassword"},
+			{"cn=ssp,ou=service-accounts,dc=example,dc=org", "userPassword"},
+			{"cn=phpldapadmin,ou=service-accounts,dc=example,dc=org", "userPassword"},
+		} {
+			args := []string{"ops", "who-can-write", target}
+			if c.attr != "sn" {
+				args = append(args, "--attr", c.attr)
+			}
+			said := strings.Contains(writeSection(run(t, admin, adPW, args...)), c.identity)
+			truth := slapaclAllows(t, c.identity, target, c.attr)
+			if said != truth {
+				t.Errorf("who-can-write(%s, %s): CLI says %v, slapacl says %v", c.attr, c.identity, said, truth)
+			}
+		}
+
+		// a rule it cannot evaluate must stop it, not be skipped on the way to a
+		// confident wrong answer
+		db := "olcDatabase={1}mdb,cn=config"
+		run(t, root, rtPW, "entry", "set", db, "olcAccess", "--add", "--config-bind",
+			`{0}to dn.subtree="ou=users,dc=example,dc=org" filter=(objectClass=inetOrgPerson) by * read`)
+		// it goes in at {0}, and it is a LIVE rule (it would take admin's write
+		// away from every user), so removing it needs --force
+		defer func() {
+			if _, se, err := try(admin, adPW, "config", "acl", "delete", db, "0", "--force"); err != nil {
+				t.Errorf("could not remove the probe rule — the rest of the suite runs against\n"+
+					"an ACL that denies admin write on ou=users: %s", se)
+			}
+		}()
+		out := run(t, admin, adPW, "ops", "who-can-write", target)
+		has(t, out, "CANNOT SAY")
+		if strings.Contains(writeSection(out), admin) {
+			t.Errorf("claimed a verdict past a rule it cannot evaluate:\n%s", out)
+		}
 		has(t, run(t, admin, adPW, "ops", "audit-binds", "--since", "1h"), "binds in last")
 		has(t, run(t, admin, adPW, "ops", "accesslog-purge", "--dry-run"), "dry-run")
 		has(t, run(t, admin, adPW, "ops", "replication"), "contextCSN")
