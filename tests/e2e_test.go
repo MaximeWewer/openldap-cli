@@ -96,7 +96,9 @@ func cleanup() {
 		try(admin, adPW, "entry", "delete", "cn=e2e.kid,ou="+o+",ou=users,dc=example,dc=org")
 		try(admin, adPW, "ou", "delete", o, "--parent", "ou=users,dc=example,dc=org")
 	}
-	try(root, rtPW, "ppolicy", "delete", "e2e.pol")
+	// --force: teardown must not be blocked by the in-use guard if a failed
+	// subtest left the policy assigned to a user
+	try(root, rtPW, "ppolicy", "delete", "e2e.pol", "--force")
 	// a failed overlay subtest would otherwise leave it enabled
 	try(admin, adPW, "config", "overlay", "disable", "constraint", "--purge")
 	for _, d := range []string{"cn=e2e.dev,ou=users,dc=example,dc=org", "cn=e2e.dev2,ou=users,dc=example,dc=org"} {
@@ -401,6 +403,58 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "user", "info", "e2e.beta"), "e2e.pol")
 		run(t, admin, adPW, "ppolicy", "assign", "e2e.beta", "--clear")
 		run(t, root, rtPW, "ppolicy", "delete", "e2e.pol")
+	})
+
+	// A pwdPolicySubentry that does not resolve does not fall back to the
+	// default: slapd applies NO policy to that user. So every path that could
+	// write or strand such a reference has to refuse.
+	t.Run("ppolicy-dangling", func(t *testing.T) {
+		run(t, root, rtPW, "ppolicy", "set", "e2e.pol", "--min-length", "12")
+		defer try(root, rtPW, "ppolicy", "delete", "e2e.pol", "--force")
+
+		// a typo must not be written verbatim
+		_, se, err := try(admin, adPW, "ppolicy", "assign", "e2e.beta", "e2e.pol.typo")
+		if err == nil || !strings.Contains(se, "no password policy named") {
+			t.Errorf("assign to a missing policy: err=%v stderr=%s", err, se)
+		}
+		has(t, se, "e2e.pol") // the refusal names the policies that do exist
+		if info := run(t, admin, adPW, "user", "info", "e2e.beta"); strings.Contains(info, "typo") {
+			t.Errorf("assign was refused but wrote anyway:\n%s", info)
+		}
+
+		// An entry that exists but is not a pwdPolicy lands slapd on the same
+		// no-policy path (ppolicy_get fetches the subentry with an objectClass
+		// filter), so existence alone is not enough — it must be refused too.
+		// This one sits in the policy OU, where a name-only check would find it.
+		notPol := "cn=e2e.notpol,ou=policies,dc=example,dc=org"
+		run(t, root, rtPW, "entry", "add", notPol, "objectClass=top", "objectClass=applicationProcess", "cn=e2e.notpol")
+		defer try(root, rtPW, "entry", "delete", notPol)
+		if _, se, err := try(admin, adPW, "ppolicy", "assign", "e2e.beta", "e2e.notpol"); err == nil ||
+			!strings.Contains(se, "no password policy named") {
+			t.Errorf("assign to a non-policy entry in the policy OU: err=%v stderr=%s", err, se)
+		}
+
+		// --clear and a policy-name are opposite intents
+		if _, se, err := try(admin, adPW, "ppolicy", "assign", "e2e.beta", "e2e.pol", "--clear"); err == nil ||
+			!strings.Contains(se, "--clear takes no policy-name") {
+			t.Errorf("assign --clear with a name: err=%v stderr=%s", err, se)
+		}
+
+		// deleting a policy out from under its users strands them
+		run(t, admin, adPW, "ppolicy", "assign", "e2e.beta", "e2e.pol")
+		_, se, err = try(root, rtPW, "ppolicy", "delete", "e2e.pol")
+		if err == nil || !strings.Contains(se, "still in use") {
+			t.Errorf("delete of an assigned policy: err=%v stderr=%s", err, se)
+		}
+		has(t, se, "cn=e2e.beta") // the refusal names who would be stranded
+		has(t, run(t, admin, adPW, "ppolicy", "list"), "e2e.pol")
+
+		// once nobody points at it, it goes
+		run(t, admin, adPW, "ppolicy", "assign", "e2e.beta", "--clear")
+		run(t, root, rtPW, "ppolicy", "delete", "e2e.pol")
+
+		// and the seeded directory has no stranded reference
+		has(t, run(t, admin, adPW, "ppolicy", "check"), "all resolve")
 	})
 
 	t.Run("config", func(t *testing.T) {

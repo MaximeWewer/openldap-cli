@@ -90,3 +90,9 @@ func IsNoSuchAttribute(err error) bool {
 func IsConstraintViolation(err error) bool {
 	return ldap.IsErrorWithCode(err, ldap.LDAPResultConstraintViolation)
 }
+
+// IsNoSuchObject reports whether err is LDAP "no such object" (code 32) — the
+// entry is genuinely absent, as opposed to unreadable by this bind.
+func IsNoSuchObject(err error) bool {
+	return ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject)
+}

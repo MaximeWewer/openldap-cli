@@ -116,10 +116,16 @@ var ppolicyAssignClear bool
 var ppolicyAssignCmd = &cobra.Command{
 	Use:   "assign <login> [policy-name]",
 	Short: "Assign a password policy to a user (pwdPolicySubentry), or clear it",
-	Long:  "Sets pwdPolicySubentry on the user, overriding the default policy.\nUse --clear (no policy-name) to revert the user to the default policy.",
-	Args:  cobra.RangeArgs(1, 2),
+	Long: "Sets pwdPolicySubentry on the user, overriding the default policy.\n" +
+		"Use --clear (no policy-name) to revert the user to the default policy.\n\n" +
+		"The policy must exist: a pwdPolicySubentry that does not resolve makes slapd\n" +
+		"apply no policy at all to the user, rather than fall back to the default.",
+	Args: cobra.RangeArgs(1, 2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		login := strings.ToLower(strings.TrimSpace(args[0]))
+		if ppolicyAssignClear && len(args) > 1 {
+			return fmt.Errorf("--clear takes no policy-name (got %q): pass one or the other", args[1])
+		}
 
 		cli, err := connect()
 		if err != nil {
@@ -137,7 +143,14 @@ var ppolicyAssignCmd = &cobra.Command{
 			if len(args) < 2 {
 				return fmt.Errorf("provide a policy-name, or use --clear")
 			}
-			policyDN := "cn=" + dnpkg.EscapeValue(strings.TrimSpace(args[1])) + "," + cli.PolicyBase()
+			// resolve rather than build: a name with a typo would otherwise be
+			// written verbatim and silently disable policy for this user
+			policyDN, rerr := resolvePolicy(cli, strings.TrimSpace(args[1]))
+			if rerr != nil {
+				return fmt.Errorf("%w\n\nRefused: assigning a policy that does not resolve does NOT fall back to\n"+
+					"the default — slapd applies no policy at all to the user (no minimum\n"+
+					"length, no lockout, no history) and the bind still succeeds.", rerr)
+			}
 			mod = ldapx.Mod{Op: ldapx.ModReplace, Name: "pwdPolicySubentry", Values: []string{policyDN}}
 			action = "assigned " + policyDN + " to"
 		}
@@ -191,23 +204,61 @@ var ppolicyShowCmd = &cobra.Command{
 	},
 }
 
+var ppolicyDeleteForce bool
+
 var ppolicyDeleteCmd = &cobra.Command{
 	Use:     "delete <name>",
 	Aliases: []string{"del", "rm"},
 	Short:   "Delete a password policy (needs a rootDN bind)",
-	Args:    cobra.ExactArgs(1),
+	Long: "Refuses while users are still assigned to the policy, or while it is the\n" +
+		"overlay default: slapd applies no policy at all to a user whose\n" +
+		"pwdPolicySubentry does not resolve, so deleting a policy in use turns\n" +
+		"password enforcement off for its users instead of reverting them to the\n" +
+		"default. --force deletes anyway.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := connect()
 		if err != nil {
 			return err
 		}
 		defer cli.Close()
-		dn := "cn=" + dnpkg.EscapeValue(strings.TrimSpace(args[0])) + "," + cli.PolicyBase()
+		dn, err := resolvePolicy(cli, strings.TrimSpace(args[0]))
+		if err != nil {
+			return err
+		}
+		if !ppolicyDeleteForce {
+			if err := checkPolicyUnreferenced(cli, dn); err != nil {
+				return err
+			}
+		}
 		if err := cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}
-		log.Debug().Str("dn", dn).Msg("policy deleted")
+		log.Debug().Str("dn", dn).Bool("force", ppolicyDeleteForce).Msg("policy deleted")
 		return out.Emit(okResult{Action: "deleted", DN: dn})
+	},
+}
+
+var ppolicyCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Find policy references that do not resolve (such users have NO policy)",
+	Long: "Scans every pwdPolicySubentry, and the overlay default, for references to a\n" +
+		"missing entry or to one that is not a pwdPolicy. slapd applies no policy at\n" +
+		"all to those users — it does not fall back to the default — so this state is\n" +
+		"invisible until someone sets a weak password and the server takes it.",
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cli, err := connect()
+		if err != nil {
+			return err
+		}
+		defer cli.Close()
+		res, err := checkPolicyRefs(cli)
+		if err != nil {
+			return err
+		}
+		log.Debug().Int("scanned", res.Scanned).Int("dangling", len(res.Dangling)).Msg("policy refs checked")
+		return out.Emit(res)
 	},
 }
 
@@ -225,7 +276,10 @@ func init() {
 	f.BoolVar(&ppolicyFlags.allowUserChange, "allow-user-change", false, "pwdAllowUserChange")
 
 	ppolicyAssignCmd.Flags().BoolVar(&ppolicyAssignClear, "clear", false, "revert user to the default policy")
+	ppolicyDeleteCmd.Flags().BoolVar(&ppolicyDeleteForce, "force", false,
+		"delete even if users are still assigned to it (they end up with no policy at all)")
 
-	ppolicyCmd.AddCommand(ppolicySetCmd, ppolicyAssignCmd, ppolicyListCmd, ppolicyShowCmd, ppolicyDeleteCmd)
+	ppolicyCmd.AddCommand(ppolicySetCmd, ppolicyAssignCmd, ppolicyListCmd, ppolicyShowCmd,
+		ppolicyDeleteCmd, ppolicyCheckCmd)
 	rootCmd.AddCommand(ppolicyCmd)
 }

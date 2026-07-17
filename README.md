@@ -223,8 +223,10 @@ aborts on the first failure (default: continue, per-item result).
 | Command                                                                                                                                                                  | Notes                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
 | `ppolicy set <name> [--min-length --max-age --expire-warning --in-history --max-failure --lockout-duration --check-quality --lockout --must-change --allow-user-change]` | create or update; only the flags you pass are written |
-| `ppolicy assign <login> <policy> [--clear]`                                                                                                                              | sets `pwdPolicySubentry` (regular admin)              |
-| `ppolicy list` / `ppolicy show <name>` / `ppolicy delete <name>`                                                                                                         | list/show (any bind); delete needs rootDN             |
+| `ppolicy assign <login> <policy> [--clear]`                                                                                                                              | sets `pwdPolicySubentry` (regular admin); the policy must resolve — see Gotchas |
+| `ppolicy list` / `ppolicy show <name>`                                                                                                                                   | list/show (any bind)                                  |
+| `ppolicy delete <name> [--force]`                                                                                                                                       | needs rootDN; refuses while users are assigned or while it is the overlay default |
+| `ppolicy check`                                                                                                                                                          | find policy references that do not resolve (those users have **no** policy) |
 
 ### svc (service accounts — entry + `cn=config` ACL)
 
@@ -312,6 +314,20 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 
 ## Gotchas worth knowing
 
+- **A password policy that does not resolve does not fall back — it turns policy
+  OFF.** `pwdPolicySubentry` (and `olcPPolicyDefault`) are plain DNs, and nothing
+  in LDAP enforces that they point at anything. When one dangles, slapd does
+  *not* apply the default: `ppolicy_get()` jumps to `defaultpol`, logs `no policy
+  will be applied!`, and uses the **empty** policy — no minimum length, no
+  lockout, no history, no expiry. The bind still succeeds, so a one-character
+  typo in a policy name is a silent security downgrade that nothing surfaces
+  until someone sets a three-character password and the server takes it. Note
+  that an entry which *exists but is not a `pwdPolicy`* lands on the same path
+  (the fetch filters on objectClass), so existence alone is not the test. The CLI
+  therefore resolves the policy before writing the reference, refuses to
+  `ppolicy delete` one that users are still assigned to (or that is the overlay
+  default) unless you pass `--force`, and ships **`ppolicy check`** to find
+  references already left dangling by an older tool or a hand edit.
 - **ppolicy lockout is real, and looks exactly like a typo.** Repeated bad binds
   (`pwdMaxFailure`) lock the data admin, and slapd then answers the *correct*
   password with `Invalid Credentials` — so the natural reaction, retrying, burns
@@ -580,7 +596,8 @@ openldap-cli ppolicy list
 openldap-cli ppolicy show strict
 openldap-cli ppolicy assign toto.titi strict                 # override the default policy
 openldap-cli ppolicy assign toto.titi --clear                # back to default
-openldap-cli --profile prod-root ppolicy delete strict       # needs the rootDN too
+openldap-cli ppolicy check                                   # any reference left pointing at nothing?
+openldap-cli --profile prod-root ppolicy delete strict       # refused while anyone is still on it
 ```
 
 ### Config & schema
