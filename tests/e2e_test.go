@@ -111,6 +111,47 @@ func TestCLI(t *testing.T) {
 	cleanup()
 	t.Cleanup(cleanup)
 
+	t.Run("replace-guard", func(t *testing.T) {
+		// `set` REPLACES: on a multi-valued attribute it drops every value not
+		// passed. One `config set olcAccess '<rule>'` used to wipe every ACL on
+		// the database and report success.
+		db := "olcDatabase={1}mdb,cn=config"
+		before := aclValues(t, db)
+		_, se, err := try(root, rtPW, "config", "set", db, "olcAccess", `to dn.base="dc=example,dc=org" by * read`)
+		if err == nil {
+			t.Fatal("config set olcAccess: wiped the ACLs instead of refusing")
+		}
+		for _, want := range []string{"would delete", "config acl grant", "--force"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("replace refusal missing %q in:\n%s", want, se)
+			}
+		}
+		if after := aclValues(t, db); len(after) != len(before) {
+			t.Fatalf("a refusal still wrote: %d rules before, %d after", len(before), len(after))
+		}
+		// passing every value back is a faithful rewrite, not a loss
+		restoreACL(t, db, before)
+		// a single-valued attribute is exactly what `set` is for
+		run(t, root, rtPW, "config", "set", "olcOverlay={4}accesslog,olcDatabase={1}mdb,cn=config",
+			"olcAccessLogSuccess", "TRUE")
+		run(t, root, rtPW, "config", "set", "olcOverlay={4}accesslog,olcDatabase={1}mdb,cn=config",
+			"olcAccessLogSuccess", "FALSE")
+
+		// same guard on the data tree: a group's member list
+		run(t, admin, adPW, "group", "create", "e2e.rg", "--member", "user1.name")
+		defer try(admin, adPW, "group", "delete", "e2e.rg")
+		run(t, admin, adPW, "group", "add-member", "e2e.rg", "user2.name")
+		if _, se, err = try(admin, adPW, "group", "set", "e2e.rg", "member",
+			"cn=user1.name,ou=users,dc=example,dc=org"); err == nil {
+			t.Error("group set member: dropped a member instead of refusing")
+		} else if !strings.Contains(se, "would delete 1 of them") {
+			t.Errorf("member refusal unclear:\n%s", se)
+		}
+		// --force is the way through
+		run(t, admin, adPW, "group", "set", "e2e.rg", "member",
+			"cn=user1.name,ou=users,dc=example,dc=org", "--force")
+	})
+
 	t.Run("errors", func(t *testing.T) {
 		// A write the ACLs don't allow must name the rootDN to use, not just
 		// say 50. The seed's data admin cannot write under ou=policies.

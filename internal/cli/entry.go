@@ -88,14 +88,20 @@ var entryAddCmd = &cobra.Command{
 
 // ---- set ----------------------------------------------------------------
 
-var entrySetAdd bool
+var (
+	entrySetAdd   bool
+	entrySetForce bool
+)
 
 var entrySetCmd = &cobra.Command{
 	Use:   "set <dn> <attr> [value...]",
 	Short: "Replace an attribute on any entry (delete it if no value; --add appends)",
 	Long: "Replaces <attr> with the given value(s). With no value it deletes the\n" +
 		"attribute. With --add it appends the value(s) instead of replacing\n" +
-		"(e.g. add a group member).",
+		"(e.g. add a group member).\n\n" +
+		"Replacing a MULTI-valued attribute drops every value you do not pass — so\n" +
+		"`set <group> member <dn>` would remove every other member. That is refused,\n" +
+		"naming what would go; --force does it anyway.",
 	Args: cobra.MinimumNArgs(2),
 	Example: "  openldap-cli entry set 'cn=team,ou=groups,dc=example,dc=org' description 'Core team'\n" +
 		"  openldap-cli entry set 'cn=team,ou=groups,dc=example,dc=org' member 'cn=x,ou=users,dc=example,dc=org' --add",
@@ -119,6 +125,12 @@ var entrySetCmd = &cobra.Command{
 			return err
 		}
 		defer cli.Close()
+		// a replace drops the values it was not shown — see guardReplace
+		if !entrySetAdd && !entrySetForce {
+			if err := guardReplace(cli, dn, attr, values); err != nil {
+				return err
+			}
+		}
 		if err := cli.Modify(dn, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", dn, err)
 		}
@@ -197,6 +209,7 @@ var entryDeleteCmd = &cobra.Command{
 func init() {
 	entryCmd.PersistentFlags().BoolVar(&entryConfigBind, "config-bind", false, "bind as the config identity (for cn=config DNs)")
 	entrySetCmd.Flags().BoolVar(&entrySetAdd, "add", false, "append the value(s) instead of replacing the attribute")
+	entrySetCmd.Flags().BoolVar(&entrySetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	entryRenameCmd.Flags().StringVar(&entryNewSuperior, "newsuperior", "", "new parent DN (move the entry)")
 	entryRenameCmd.Flags().BoolVar(&entryKeepOldRDN, "keep-old-rdn", false, "keep the old RDN value as an attribute (deleteOldRDN=false)")
 	withFixACLFlag(entryRenameCmd)

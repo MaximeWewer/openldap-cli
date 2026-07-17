@@ -148,6 +148,8 @@ func (r userInfo) Text() string {
 
 // ---- set (modify single attribute) -------------------------------------
 
+var userSetForce bool
+
 var userSetCmd = &cobra.Command{
 	Use:   "set <login> <attr> [value...]",
 	Short: "Replace (or delete, if no value) a single attribute on a user",
@@ -173,6 +175,12 @@ var userSetCmd = &cobra.Command{
 		if len(values) == 0 {
 			mod.Op = ldapx.ModDelete
 			action = "deleted " + attr + " on"
+		}
+		// a replace drops the values it was not shown — see guardReplace
+		if !userSetForce {
+			if err := guardReplace(cli, entry.DN, attr, values); err != nil {
+				return err
+			}
 		}
 		if err := cli.Modify(entry.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", entry.DN, err)
@@ -277,6 +285,7 @@ var userMoveCmd = &cobra.Command{
 }
 
 func init() {
+	userSetCmd.Flags().BoolVar(&userSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	withFixACLFlag(userRenameCmd, userMoveCmd)
 	userCmd.AddCommand(userDeleteCmd, userInfoCmd, userSetCmd, userRenameCmd, userMoveCmd)
 }

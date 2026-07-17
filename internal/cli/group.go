@@ -166,6 +166,8 @@ func groupMemberRunE(add bool) func(*cobra.Command, []string) error {
 
 // ---- set ----------------------------------------------------------------
 
+var groupSetForce bool
+
 var groupSetCmd = &cobra.Command{
 	Use:   "set <name> <attr> [value...]",
 	Short: "Replace (or delete, if no value) a single attribute on a group",
@@ -191,6 +193,12 @@ var groupSetCmd = &cobra.Command{
 		if len(values) == 0 {
 			mod.Op = ldapx.ModDelete
 			action = "deleted " + attr + " on"
+		}
+		// a replace drops the values it was not shown — see guardReplace
+		if !groupSetForce {
+			if err := guardReplace(cli, g.DN, attr, values); err != nil {
+				return err
+			}
 		}
 		if err := cli.Modify(g.DN, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", g.DN, err)
@@ -288,6 +296,7 @@ var groupInfoCmd = &cobra.Command{
 func init() {
 	groupCreateCmd.Flags().StringArrayVar(&groupCreateMembers, "member", nil, "member login (repeatable)")
 	groupListCmd.Flags().BoolVar(&groupListMembers, "members", false, "include member DNs")
+	groupSetCmd.Flags().BoolVar(&groupSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	withFixACLFlag(groupRenameCmd)
 	groupCmd.AddCommand(groupCreateCmd, groupAddMemberCmd, groupRemoveMemberCmd,
 		groupSetCmd, groupRenameCmd, groupDeleteCmd, groupInfoCmd)

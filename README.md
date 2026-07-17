@@ -267,7 +267,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config acl delete <database-dn> <index> [--force]`                             | delete one rule, by the exact value the server holds (the rest are untouched; the server renumbers). Removing a **dead** rule — one `lint` reports — changes nothing and is the point: `revoke` keeps a deliberate `by * none`, so a dead rule has no other way out. Deleting a **live** rule is **refused**, naming the clauses that would stop applying; `--force` overrides |
 | `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one — slapd rejects a clauseless rule, which used to fail the whole revoke — or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access |
 | `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
-| `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)                                                        |
+| `config set <dn> <attr> [value…]` `[--add] [--force]`                          | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`). `set` **replaces the whole attribute** — on a multi-valued one it drops every value you do not pass, so it is **refused** when that would lose values, naming them; `--add` appends, `--force` overrides |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                           |
 | `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits`                                                     |
 
@@ -343,6 +343,15 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **`set` replaces, it does not add — and the CLI stops you at the cliff.**
+  On a single-valued attribute that is the point. On a multi-valued one
+  (`olcAccess`, `olcLimits`, `olcModuleLoad`, `member`) naming one value deletes
+  the rest: one `config set <db> olcAccess '<rule>'` is every ACL on the
+  database, gone, with a success message. So `config set`, `entry set`,
+  `user/group/ou set` read the attribute first and **refuse** a replace that
+  would drop values, listing them. Passing every value back is a faithful
+  rewrite and goes through; `--add` appends; `--force` deletes on purpose. For
+  ACLs prefer `config acl grant`/`revoke`/`delete`, which edit one rule.
 - **A dead rule needs `config acl delete`, not `revoke`.** `config acl revoke`
   strips a grantee's clauses and drops the rules that empty out — but it keeps a
   rule left as `by * none`, because an explicit deny is not leftover noise. So a

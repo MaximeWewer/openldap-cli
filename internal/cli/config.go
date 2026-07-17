@@ -740,17 +740,31 @@ var configACLRevokeCmd = &cobra.Command{
 
 // ---- set (generic cn=config attribute) ----------------------------------
 
+var (
+	configSetAdd   bool
+	configSetForce bool
+)
+
 var configSetCmd = &cobra.Command{
 	Use:   "set <dn> <attr> [value...]",
-	Short: "Set (or delete, if no value) an attribute on a cn=config entry",
+	Short: "Set an attribute on a cn=config entry (delete it if no value; --add appends)",
 	Long: "Generic cn=config writer (the config-tree counterpart of `user set`).\n" +
-		"Replaces <attr> with the given value(s), or deletes it when none are given.",
+		"Replaces <attr> with the given value(s), or deletes it when none are given.\n\n" +
+		"Replacing a MULTI-valued attribute drops every value you do not pass — one\n" +
+		"`set olcAccess '<rule>'` would take every other ACL on the database with it.\n" +
+		"That is refused, naming what would go; --add appends instead, and --force\n" +
+		"does it anyway.",
 	Args: cobra.MinimumNArgs(2),
 	Example: "  # enable logging of successful operations in the accesslog overlay\n" +
 		"  openldap-cli config set 'olcOverlay={4}accesslog,olcDatabase={1}mdb,cn=config' olcAccessLogSuccess TRUE\n" +
-		"  openldap-cli config set 'olcDatabase={1}mdb,cn=config' olcDbMaxSize 2147483648",
+		"  openldap-cli config set 'olcDatabase={1}mdb,cn=config' olcDbMaxSize 2147483648\n" +
+		"  # append one value to a multi-valued attribute\n" +
+		"  openldap-cli config set 'cn=module{0},cn=config' olcModuleLoad unique.so --add",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		dn, attr, values := args[0], args[1], args[2:]
+		if configSetAdd && len(values) == 0 {
+			return fmt.Errorf("--add needs at least one value")
+		}
 		cc, err := connectConfig()
 		if err != nil {
 			return err
@@ -759,9 +773,18 @@ var configSetCmd = &cobra.Command{
 
 		mod := ldapx.Mod{Op: ldapx.ModReplace, Name: attr, Values: values}
 		action := "set " + attr + " on"
-		if len(values) == 0 {
+		switch {
+		case configSetAdd:
+			mod.Op = ldapx.ModAdd
+			action = "added " + attr + " on"
+		case len(values) == 0:
 			mod.Op = ldapx.ModDelete
 			action = "deleted " + attr + " on"
+		}
+		if !configSetAdd && !configSetForce {
+			if err := guardReplace(cc, dn, attr, values); err != nil {
+				return err
+			}
 		}
 		if err := cc.Modify(dn, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", dn, err)
@@ -795,6 +818,8 @@ func init() {
 	configOverlayEnableCmd.Flags().BoolVar(&overlayNoModule, "no-module", false, "fail instead of loading the overlay's module when its schema is missing")
 	configOverlayDisableCmd.Flags().BoolVar(&overlayPurge, "purge", false, "delete the overlay entry and its settings instead of just deactivating it")
 	configOverlayCmd.AddCommand(configOverlayListCmd, configOverlayEnableCmd, configOverlayDisableCmd)
+	configSetCmd.Flags().BoolVar(&configSetAdd, "add", false, "append the value(s) instead of replacing the attribute")
+	configSetCmd.Flags().BoolVar(&configSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	configACLMoveCmd.Flags().BoolVar(&aclMoveForce, "force", false, "apply the move even if it changes who has access")
 	configACLDeleteCmd.Flags().BoolVar(&aclDeleteForce, "force", false, "delete even if the rule is live and its removal changes who has access")
 	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")

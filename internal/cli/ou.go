@@ -111,6 +111,8 @@ var ouInfoCmd = &cobra.Command{
 
 // ---- set ----------------------------------------------------------------
 
+var ouSetForce bool
+
 var ouSetCmd = &cobra.Command{
 	Use:   "set <name> <attr> [value...]",
 	Short: "Replace (or delete, if no value) a single attribute on an OU",
@@ -134,6 +136,12 @@ var ouSetCmd = &cobra.Command{
 		if len(values) == 0 {
 			mod.Op = ldapx.ModDelete
 			action = "deleted " + attr + " on"
+		}
+		// a replace drops the values it was not shown — see guardReplace
+		if !ouSetForce {
+			if err := guardReplace(cli, dn, attr, values); err != nil {
+				return err
+			}
 		}
 		if err := cli.Modify(dn, []ldapx.Mod{mod}); err != nil {
 			return fmt.Errorf("modify %s: %w", dn, err)
@@ -216,6 +224,7 @@ func init() {
 	for _, c := range []*cobra.Command{ouCreateCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd} {
 		c.Flags().StringVar(&ouParent, "parent", "", "parent DN (default: base DN)")
 	}
+	ouSetCmd.Flags().BoolVar(&ouSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	withFixACLFlag(ouRenameCmd)
 	ouCmd.AddCommand(ouCreateCmd, ouListCmd, ouInfoCmd, ouSetCmd, ouRenameCmd, ouDeleteCmd)
 	rootCmd.AddCommand(ouCmd)
