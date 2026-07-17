@@ -330,13 +330,36 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "user", "info", "e2e.alpha"), "e2e.alpha")
 
 		js := run(t, admin, adPW, "-o", "json", "user", "info", "e2e.alpha")
-		var info map[string]any
+		var info struct {
+			UID  []string `json:"uid"`
+			Mail []string `json:"mail"`
+		}
 		if err := json.Unmarshal([]byte(js), &info); err != nil {
 			t.Fatalf("json info: %v\n%s", err, js)
 		}
-		if info["uid"] != "e2e.alpha" {
-			t.Errorf("json uid = %v", info["uid"])
+		// identity attributes are multi-valued in the schema, so info renders
+		// them as arrays — showing only the first hid the rest
+		if len(info.UID) != 1 || info.UID[0] != "e2e.alpha" {
+			t.Errorf("json uid = %v", info.UID)
 		}
+
+		// a second mail must not disappear from the report (text and json)
+		alpha := "cn=e2e.alpha,ou=users,dc=example,dc=org"
+		run(t, admin, adPW, "entry", "set", alpha, "mail", "--add", "alt@example.org")
+		txt := run(t, admin, adPW, "user", "info", "e2e.alpha")
+		has(t, txt, "alt@example.org")
+		has(t, txt, "e2e.alpha@example.org") // both, not just one
+		js2 := run(t, admin, adPW, "-o", "json", "user", "info", "e2e.alpha")
+		var info2 struct {
+			Mail []string `json:"mail"`
+		}
+		if err := json.Unmarshal([]byte(js2), &info2); err != nil {
+			t.Fatalf("json info2: %v\n%s", err, js2)
+		}
+		if len(info2.Mail) != 2 {
+			t.Errorf("json mail = %v, want both values", info2.Mail)
+		}
+		run(t, admin, adPW, "user", "set", "e2e.alpha", "mail", "e2e.alpha@example.org", "--force")
 
 		run(t, admin, adPW, "user", "set", "e2e.alpha", "description", "Pioneer")
 		run(t, admin, adPW, "user", "passwd", "e2e.alpha", "--password", "LongPassword12345")

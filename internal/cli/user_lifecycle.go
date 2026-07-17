@@ -98,12 +98,12 @@ var userInfoCmd = &cobra.Command{
 		lockedSince := entry.Get("pwdAccountLockedTime")
 		return out.Emit(userInfo{
 			DN:           entry.DN,
-			UID:          entry.Get("uid"),
-			CN:           entry.Get("cn"),
-			SN:           entry.Get("sn"),
-			GivenName:    entry.Get("givenName"),
-			DisplayName:  entry.Get("displayName"),
-			Mail:         entry.Get("mail"),
+			UID:          entry.GetAll("uid"),
+			CN:           entry.GetAll("cn"),
+			SN:           entry.GetAll("sn"),
+			GivenName:    entry.GetAll("givenName"),
+			DisplayName:  entry.Get("displayName"), // SINGLE-VALUE
+			Mail:         entry.GetAll("mail"),
 			Groups:       entry.GetAll("memberOf"),
 			Locked:       lockedSince != "",
 			LockedSince:  lockedSince,
@@ -115,14 +115,18 @@ var userInfoCmd = &cobra.Command{
 	},
 }
 
+// The identity attributes (uid, cn, sn, givenName, mail) are multi-valued in
+// inetOrgPerson, so they are []string: showing only the first, as this did,
+// silently hid the rest — a second mail an operator had added just vanished from
+// `user info`. displayName is SINGLE-VALUE per the schema, so it stays scalar.
 type userInfo struct {
 	DN           string   `json:"dn" yaml:"dn"`
-	UID          string   `json:"uid,omitempty" yaml:"uid,omitempty"`
-	CN           string   `json:"cn,omitempty" yaml:"cn,omitempty"`
-	SN           string   `json:"sn,omitempty" yaml:"sn,omitempty"`
-	GivenName    string   `json:"givenName,omitempty" yaml:"givenName,omitempty"`
+	UID          []string `json:"uid,omitempty" yaml:"uid,omitempty"`
+	CN           []string `json:"cn,omitempty" yaml:"cn,omitempty"`
+	SN           []string `json:"sn,omitempty" yaml:"sn,omitempty"`
+	GivenName    []string `json:"givenName,omitempty" yaml:"givenName,omitempty"`
 	DisplayName  string   `json:"displayName,omitempty" yaml:"displayName,omitempty"`
-	Mail         string   `json:"mail,omitempty" yaml:"mail,omitempty"`
+	Mail         []string `json:"mail,omitempty" yaml:"mail,omitempty"`
 	Groups       []string `json:"groups,omitempty" yaml:"groups,omitempty"`
 	Locked       bool     `json:"locked" yaml:"locked"`
 	LockedSince  string   `json:"lockedSince,omitempty" yaml:"lockedSince,omitempty"`
@@ -140,12 +144,19 @@ func (r userInfo) Text() string {
 			fmt.Fprintf(&b, "  %-12s %s\n", k+":", v)
 		}
 	}
-	line("uid", r.UID)
-	line("cn", r.CN)
+	// lines shows every value: a hidden second value is exactly the bug here, so
+	// each gets its own line under the key rather than the first winning.
+	lines := func(k string, vs []string) {
+		for _, v := range vs {
+			line(k, v)
+		}
+	}
+	lines("uid", r.UID)
+	lines("cn", r.CN)
 	line("displayName", r.DisplayName)
-	line("givenName", r.GivenName)
-	line("sn", r.SN)
-	line("mail", r.Mail)
+	lines("givenName", r.GivenName)
+	lines("sn", r.SN)
+	lines("mail", r.Mail)
 	line("policy", r.Policy)
 	line("pwdChanged", r.PwdChangedAt)
 	status := "active"
