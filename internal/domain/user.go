@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/MaximeWewer/openldap-cli/internal/dn"
 )
 
 // Posix carries optional posixAccount attributes for a user.
@@ -64,12 +66,8 @@ func ParseUser(login, mailDomain string) (*User, error) {
 
 // DN builds the entry DN: cn=<login>,<userOU>,<baseDN>.
 func (u *User) DN(userOU, baseDN string) string {
-	parts := []string{"cn=" + u.UID}
-	if userOU != "" {
-		parts = append(parts, userOU)
-	}
-	parts = append(parts, baseDN)
-	return strings.Join(parts, ",")
+	// the login is text: a `,` or `+` in it would become DN syntax
+	return dn.Join("cn="+dn.EscapeValue(u.UID), userOU, baseDN)
 }
 
 // Attr is one attribute and its values.

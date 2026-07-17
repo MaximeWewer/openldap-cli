@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
@@ -70,7 +71,7 @@ var ppolicySetCmd = &cobra.Command{
 		}
 		defer cli.Close()
 
-		dn := "cn=" + name + "," + cli.PolicyBase()
+		dn := "cn=" + dnpkg.EscapeValue(name) + "," + cli.PolicyBase()
 		existing, err := cli.Search(cli.PolicyBase(),
 			fmt.Sprintf("(&(objectClass=pwdPolicy)(cn=%s))", ldapx.EscapeFilter(name)), []string{"cn"})
 		if err != nil {
@@ -136,7 +137,7 @@ var ppolicyAssignCmd = &cobra.Command{
 			if len(args) < 2 {
 				return fmt.Errorf("provide a policy-name, or use --clear")
 			}
-			policyDN := "cn=" + strings.TrimSpace(args[1]) + "," + cli.PolicyBase()
+			policyDN := "cn=" + dnpkg.EscapeValue(strings.TrimSpace(args[1])) + "," + cli.PolicyBase()
 			mod = ldapx.Mod{Op: ldapx.ModReplace, Name: "pwdPolicySubentry", Values: []string{policyDN}}
 			action = "assigned " + policyDN + " to"
 		}
@@ -179,7 +180,7 @@ var ppolicyShowCmd = &cobra.Command{
 			return err
 		}
 		defer cli.Close()
-		dn := "cn=" + strings.TrimSpace(args[0]) + "," + cli.PolicyBase()
+		dn := "cn=" + dnpkg.EscapeValue(strings.TrimSpace(args[0])) + "," + cli.PolicyBase()
 		e, err := cli.ReadEntry(dn, []string{"cn", "pwdAttribute", "pwdMinLength", "pwdMaxAge",
 			"pwdExpireWarning", "pwdInHistory", "pwdMaxFailure", "pwdLockout", "pwdLockoutDuration",
 			"pwdCheckQuality", "pwdMustChange", "pwdAllowUserChange"})
@@ -201,7 +202,7 @@ var ppolicyDeleteCmd = &cobra.Command{
 			return err
 		}
 		defer cli.Close()
-		dn := "cn=" + strings.TrimSpace(args[0]) + "," + cli.PolicyBase()
+		dn := "cn=" + dnpkg.EscapeValue(strings.TrimSpace(args[0])) + "," + cli.PolicyBase()
 		if err := cli.Delete(dn); err != nil {
 			return fmt.Errorf("delete %s: %w", dn, err)
 		}

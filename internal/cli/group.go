@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
@@ -40,7 +41,7 @@ var groupCreateCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		dn := "cn=" + name + "," + cli.GroupBase()
+		dn := "cn=" + dnpkg.EscapeValue(name) + "," + cli.GroupBase()
 		attrs := map[string][]string{
 			"objectClass": {"top", "groupOfNames"},
 			"cn":          {name},
@@ -249,10 +250,10 @@ var groupRenameCmd = &cobra.Command{
 			return err
 		}
 		// deleteOldRDN: the old cn must go, or the group answers to both names
-		if err := cli.Rename(g.DN, "cn="+newName, true, ""); err != nil {
+		if err := cli.Rename(g.DN, "cn="+dnpkg.EscapeValue(newName), true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", g.DN, err)
 		}
-		newDN := "cn=" + newName + "," + cli.GroupBase()
+		newDN := "cn=" + dnpkg.EscapeValue(newName) + "," + cli.GroupBase()
 		log.Debug().Str("from", g.DN).Str("to", newDN).Msg("group renamed")
 		if err := fixACLRefs(g.DN, newDN); err != nil {
 			return err

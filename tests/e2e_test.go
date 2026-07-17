@@ -111,6 +111,31 @@ func TestCLI(t *testing.T) {
 	cleanup()
 	t.Cleanup(cleanup)
 
+	t.Run("dn-escaping", func(t *testing.T) {
+		// A DN is assembled from text, so a `,` or `+` in a name used to become DN
+		// syntax and slapd rejected the lot with a bare `Invalid DN Syntax`.
+		// RFC 4514 escaping makes them ordinary characters.
+		has(t, run(t, admin, adPW, "group", "create", "e2e,comma", "--member", "user1.name"), `cn=e2e\,comma`)
+		defer try(root, rtPW, "group", "delete", "e2e,comma")
+		// the value must survive the round trip, and the name must still resolve
+		has(t, run(t, admin, adPW, "group", "info", "e2e,comma"), "cn: e2e,comma")
+
+		has(t, run(t, admin, adPW, "user", "add", "e2e+plus", "--no-password"), `cn=e2e\+plus`)
+		defer try(admin, adPW, "user", "delete", "e2e+plus")
+		has(t, run(t, admin, adPW, "user", "info", "e2e+plus"), "e2e+plus")
+
+		// rename and delete must reach it too (the server hands the DN back
+		// hex-escaped, `\2C`, not the `\,` we sent)
+		run(t, root, rtPW, "group", "rename", "e2e,comma", "e2e;semi")
+		defer try(root, rtPW, "group", "delete", "e2e;semi")
+		has(t, run(t, admin, adPW, "group", "info", "e2e;semi"), "cn: e2e;semi")
+
+		// an ordinary name must come through byte-for-byte
+		has(t, run(t, admin, adPW, "group", "create", "e2e.plain", "--member", "user1.name"),
+			"cn=e2e.plain,ou=groups,dc=example,dc=org")
+		try(root, rtPW, "group", "delete", "e2e.plain")
+	})
+
 	t.Run("wrong-type", func(t *testing.T) {
 		// The typed commands only manage groupOfNames / inetOrgPerson. An entry of
 		// another type is not "not found" — saying so sends the operator looking

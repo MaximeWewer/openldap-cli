@@ -343,6 +343,13 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **Names with `,` `+` `\` `"` `;` `<` `>` are fine.** A DN is assembled from
+  text, so such a character in a name would otherwise become DN *syntax* — the
+  entry lands elsewhere, or slapd rejects the lot with a bare `Invalid DN
+  Syntax` that names nothing. Every RDN the CLI builds is escaped per RFC 4514,
+  so `group create 'acme,inc'` creates `cn=acme\,inc,…` with `cn: acme,inc`
+  intact, and `info`/`rename`/`delete` still resolve it. Ordinary names are
+  untouched. (LDAP *filters* were already escaped.)
 - **The typed commands only manage `groupOfNames` and `inetOrgPerson` — and say
   so.** That is deliberate: `group add-member` writes `member`, which a
   `groupOfUniqueNames` (`uniqueMember`) or a `posixGroup` (`memberUid`) would
@@ -442,6 +449,7 @@ internal/
   domain/   YOUR conventions — naming + schema (edit here)
   acl/      olcAccess surgery        (unit-tested)
   ldif/     LDIF read/write          (unit-tested)
+  dn/       RFC 4514 DN escaping     (unit-tested)
   pwd/      password generation      (unit-tested)
   schema/   schema NAME parser       (unit-tested)
   output/   text/json/yaml rendering

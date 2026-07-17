@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/MaximeWewer/openldap-cli/internal/acl"
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 	"github.com/MaximeWewer/openldap-cli/internal/pwd"
 )
@@ -24,7 +25,7 @@ var (
 )
 
 func svcDN(cli *ldapx.Client, name string) string {
-	return "cn=" + name + "," + svcOU + "," + cli.Config().BaseDN
+	return "cn=" + dnpkg.EscapeValue(name) + "," + svcOU + "," + cli.Config().BaseDN
 }
 
 // ---- grant (the "an app must search a tree" recipe) ---------------------

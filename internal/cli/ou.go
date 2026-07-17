@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
 
@@ -28,7 +29,7 @@ func ouDN(name string) (string, error) {
 		}
 		parent = cfg.BaseDN
 	}
-	return "ou=" + strings.TrimSpace(name) + "," + parent, nil
+	return "ou=" + dnpkg.EscapeValue(strings.TrimSpace(name)) + "," + parent, nil
 }
 
 // ---- create -------------------------------------------------------------
@@ -184,7 +185,7 @@ var ouRenameCmd = &cobra.Command{
 		defer cli.Close()
 
 		// deleteOldRDN: the old ou value must go, or the entry keeps both names
-		if err := cli.Rename(dn, "ou="+newName, true, ""); err != nil {
+		if err := cli.Rename(dn, "ou="+dnpkg.EscapeValue(newName), true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", dn, err)
 		}
 		log.Debug().Str("from", dn).Str("to", newDN).Msg("ou renamed")
