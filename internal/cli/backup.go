@@ -28,7 +28,11 @@ var backupCmd = &cobra.Command{
 		"Exports use Simple Paged Results, so the server's olcSizeLimit never\n" +
 		"silently truncates the dump. Files ending in .gz are gzip-compressed; the\n" +
 		"matching gzip is auto-detected on restore.\n\n" +
-		"Dumps contain password hashes — keep them on an encrypted partition.\n\n" +
+		"The dump carries only what the BIND can read: slapd applies its ACLs, so a\n" +
+		"non-rootDN bind silently omits entries and attributes (userPassword above\n" +
+		"all) it is denied. `backup data` checks this and warns — take backups as the\n" +
+		"rootDN, whose reads bypass every ACL. Dumps then contain password hashes;\n" +
+		"keep them on an encrypted partition.\n\n" +
 		"This complements, and does NOT replace, a filesystem / slapcat backup:\n" +
 		"operational state (entryUUID/entryCSN, replication contextCSN) and the\n" +
 		"config tree are not restorable over the wire.",
@@ -158,7 +162,10 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 		size = fi.Size()
 	}
 	log.Debug().Str("file", path).Int("entries", len(entries)).Int64("bytes", size).Msg("backup written")
-	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries), Bytes: size})
+	// the dump went through the profile's bind, so it carries only what that
+	// identity may read — say whether that is the whole database or a subset
+	audit := auditBackup(cli, base, len(entries))
+	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries), Bytes: size, Audit: audit})
 }
 
 // readLDIF reads entries from a plain or gzipped LDIF file (auto-detected by
@@ -214,15 +221,20 @@ func isNoUserMod(name string) bool { return noUserMod[strings.ToLower(name)] }
 
 // dumpResult reports a written backup file.
 type dumpResult struct {
-	File    string `json:"file" yaml:"file"`
-	Base    string `json:"base" yaml:"base"`
-	Entries int    `json:"entries" yaml:"entries"`
-	Bytes   int64  `json:"bytes" yaml:"bytes"`
+	File    string      `json:"file" yaml:"file"`
+	Base    string      `json:"base" yaml:"base"`
+	Entries int         `json:"entries" yaml:"entries"`
+	Bytes   int64       `json:"bytes" yaml:"bytes"`
+	Audit   backupAudit `json:"audit" yaml:"audit"`
 }
 
 func (r dumpResult) Text() string {
-	return fmt.Sprintf("backed up %d entries, %s (%s) -> %s",
+	s := fmt.Sprintf("backed up %d entries, %s (%s) -> %s",
 		r.Entries, humanize.Bytes(r.Bytes), r.Base, r.File)
+	if w := r.Audit.Warning(); w != "" {
+		s += "\n  " + w
+	}
+	return s
 }
 
 func init() {

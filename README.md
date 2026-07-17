@@ -282,7 +282,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 
 | Command                                   | Notes                                                                                                                                                  |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` (see below) so nothing is truncated |
+| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` so size never truncates. **Reads through the bind's ACLs** — a non-rootDN dump silently omits entries and attributes (`userPassword`) it may not read, so the command checks against the real entry count and warns; take backups as the **rootDN** |
 | `backup config <file>`                    | dump `cn=config` (config bind). Inspection / DR record — **not** restorable live over LDAP                                                             |
 | `backup restore <file> [--stop-on-error]` | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                                                                    |
 
@@ -513,6 +513,18 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   slapd (observed intermittently, any database, under concurrent load). The new
   size is persisted to `cn=config` and applied regardless, and the command warns
   first. Prefer a quiet maintenance window.
+- **`backup data` reads through the bind's ACLs — take it as the rootDN.** The
+  dump is an ordinary LDAP search, so slapd applies the bind's access controls to
+  it: entries the identity cannot see are absent, and attributes it cannot read —
+  `userPassword` before anything — are dropped from the entries that remain. The
+  count then reads as a whole backup when it is a filtered subset, and restoring
+  it recreates accounts that cannot authenticate, missing whatever entries were
+  invisible. Only the rootDN bypasses access control, so only its dump is
+  complete by construction. The command checks which case yours is — it reads the
+  database's true entry count from the monitor (`olmMDBEntries`) and, when the
+  bind is not the rootDN, warns and quantifies the entries missing. A rootDN dump
+  is silent. **If the warning names missing entries or a non-rootDN bind, that
+  file is not a backup you can restore from.**
 - **`backup restore` needs the rootDN:** the Relax control (re-adding a
   `userPassword` under a strict ppolicy) is only honored for the rootDN. As a
   data admin, password-bearing entries fail the policy check. `backup` is a
@@ -754,8 +766,9 @@ openldap-cli ops replication                                # local contextCSN (
 ### Backup & restore (no docker/alpine — just the CLI)
 
 ```bash
-# Dump the data tree to a gzipped LDIF (paged: olcSizeLimit never truncates)
-openldap-cli backup data "backup_data_$(date +%Y%m%d).ldif.gz"
+# Dump the data tree to a gzipped LDIF. Bind as the rootDN, or the dump is
+# ACL-filtered (missing entries + userPassword) — the command warns if it is.
+openldap-cli --profile prod-root backup data "backup_data_$(date +%Y%m%d).ldif.gz"
 
 # Full-fidelity dump incl. operational attributes (inspection, not restorable)
 openldap-cli backup data --operational full_dump.ldif.gz

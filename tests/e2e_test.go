@@ -935,6 +935,23 @@ func TestCLI(t *testing.T) {
 		// under a strict ppolicy) is only honored for the rootDN.
 		has(t, run(t, root, rtPW, "backup", "restore", gz), "imported")
 		has(t, run(t, admin, adPW, "user", "info", "e2e.bak"), "e2e.bak")
+
+		// A dump carries only what the bind can read, so it must say whether it
+		// is complete. The rootDN bypasses every ACL, so its dump is verified —
+		// no warning.
+		clean := run(t, root, rtPW, "backup", "data", t.TempDir()+"/root.ldif.gz")
+		if strings.Contains(clean, "INCOMPLETE") || strings.Contains(clean, "NOT a verified") {
+			t.Errorf("rootDN dump warned about completeness:\n%s", clean)
+		}
+
+		// The phpldapadmin service account (seed) reads only part of the tree and
+		// no userPassword: its dump is short, and that has to be surfaced, not
+		// buried under a success line.
+		php := "cn=phpldapadmin,ou=service-accounts,dc=example,dc=org"
+		short := run(t, php, "phpldapadmin", "backup", "data", t.TempDir()+"/php.ldif.gz")
+		has(t, short, "INCOMPLETE")
+		has(t, short, "missing")
+		has(t, short, "userPassword")
 	})
 
 	t.Run("entry", func(t *testing.T) {
