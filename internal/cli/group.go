@@ -252,10 +252,14 @@ var groupRenameCmd = &cobra.Command{
 			return err
 		}
 		// deleteOldRDN: the old cn must go, or the group answers to both names
-		if err = cli.Rename(g.DN, "cn="+dnpkg.EscapeValue(newName), true, ""); err != nil {
+		newRDN := "cn=" + dnpkg.EscapeValue(newName)
+		if err = cli.Rename(g.DN, newRDN, true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", g.DN, err)
 		}
-		newDN := "cn=" + dnpkg.EscapeValue(newName) + "," + cli.GroupBase()
+		// in place, so the parent is the old DN's — not the configured group base:
+		// FindGroup searches the whole subtree, so the group may sit in an OU
+		// below it, and rebuilding the DN from the base would name nothing
+		newDN := dnpkg.ReplaceRDN(g.DN, newRDN)
 		log.Debug().Str("from", g.DN).Str("to", newDN).Msg("group renamed")
 		if err = fixACLRefs(g.DN, newDN); err != nil {
 			return err

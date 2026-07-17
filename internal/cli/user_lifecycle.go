@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/domain"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 )
@@ -240,11 +241,16 @@ var userRenameCmd = &cobra.Command{
 		}
 
 		// modrdn cn=<old> -> cn=<new>, dropping the old cn value.
-		newRDN := "cn=" + nu.UID
+		newRDN := "cn=" + dnpkg.EscapeValue(nu.UID)
 		if err = cli.Rename(entry.DN, newRDN, true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", entry.DN, err)
 		}
-		newDN := nu.DN(cfg.UserOU, cfg.BaseDN)
+		// The rename is IN PLACE, so the new DN keeps the old one's parent. It is
+		// not `nu.DN(cfg.UserOU, …)`: FindUser searches the whole subtree, so the
+		// user may live in an OU below it (`user move` puts them there), and
+		// rebuilding the DN from the configured OU then names an entry that does
+		// not exist — leaving the entry renamed and its attributes stale.
+		newDN := dnpkg.ReplaceRDN(entry.DN, newRDN)
 
 		// refresh derived attrs on the new DN (cn is handled by the modrdn)
 		mods := []ldapx.Mod{
@@ -261,7 +267,11 @@ var userRenameCmd = &cobra.Command{
 			mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "mail", Values: []string{nu.Mail}})
 		}
 		if err = cli.Modify(newDN, mods); err != nil {
-			return fmt.Errorf("refresh attrs on %s: %w", newDN, err)
+			// the modrdn already went through, so say what the entry IS now
+			// rather than report the rename as having failed
+			return fmt.Errorf("the entry is renamed to %s, but refreshing its derived attributes failed:"+
+				" %w\n\nIt still carries the old login's uid/sn/mail. Fix them with `user set`,"+
+				" and note that `user rename` now finds it under its new name.", newDN, err)
 		}
 		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user renamed")
 		if err = fixACLRefs(entry.DN, newDN); err != nil {
@@ -300,7 +310,10 @@ var userMoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		rdn := strings.SplitN(entry.DN, ",", 2)[0] // keep the existing RDN
+		// keep the existing RDN — and split the DN properly: a `\,` inside the
+		// name is not a separator, so a naive cut on the first comma would move
+		// the entry to a truncated RDN
+		rdn, _ := dnpkg.Split(entry.DN)
 		if err = cli.Rename(entry.DN, rdn, false, newParent); err != nil {
 			return fmt.Errorf("move %s: %w", entry.DN, err)
 		}

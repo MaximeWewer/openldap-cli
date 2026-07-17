@@ -432,6 +432,42 @@ func TestCLI(t *testing.T) {
 		has(t, got, "sn:          Surname") // not the "Reorder" the login would derive
 	})
 
+	// `user move` puts users in OUs below the user base, and FindUser searches
+	// the whole subtree — so rename must keep the parent the entry actually has
+	// rather than rebuild the DN from the configured OU.
+	t.Run("rename-nested", func(t *testing.T) {
+		userParent := "ou=users,dc=example,dc=org"
+		run(t, admin, adPW, "ou", "create", "e2e.nest", "--parent", userParent)
+		defer try(admin, adPW, "ou", "delete", "e2e.nest", "--parent", userParent)
+		nested := "ou=e2e.nest," + userParent
+
+		run(t, admin, adPW, "user", "add", "e2e.nst", "--no-password")
+		defer try(admin, adPW, "user", "delete", "e2e.nst2")
+		defer try(admin, adPW, "user", "delete", "e2e.nst")
+		run(t, admin, adPW, "user", "move", "e2e.nst", nested)
+
+		// used to fail with `No Such Object` on a DN nobody typed, leaving the
+		// entry renamed and its uid/sn/mail still the old login's
+		has(t, run(t, admin, adPW, "user", "rename", "e2e.nst", "e2e.nst2"), "cn=e2e.nst2,"+nested)
+		got := run(t, admin, adPW, "user", "info", "e2e.nst2")
+		has(t, got, "cn=e2e.nst2,"+nested)
+		has(t, got, "uid:         e2e.nst2") // the derived attrs followed too
+		has(t, got, "sn:          Nst2")
+
+		// same shape for groups: FindGroup is a subtree search as well
+		groupParent := "ou=groups,dc=example,dc=org"
+		run(t, admin, adPW, "ou", "create", "e2e.gnest", "--parent", groupParent)
+		defer try(admin, adPW, "ou", "delete", "e2e.gnest", "--parent", groupParent)
+		gnested := "ou=e2e.gnest," + groupParent
+		run(t, admin, adPW, "entry", "add", "cn=e2e.gn,"+gnested,
+			"objectClass=top", "objectClass=groupOfNames", "cn=e2e.gn",
+			"member=cn=e2e.nst2,"+nested)
+		defer try(admin, adPW, "entry", "delete", "cn=e2e.gn2,"+gnested)
+		defer try(admin, adPW, "entry", "delete", "cn=e2e.gn,"+gnested)
+		has(t, run(t, admin, adPW, "group", "rename", "e2e.gn", "e2e.gn2"), "cn=e2e.gn2,"+gnested)
+		has(t, run(t, admin, adPW, "group", "info", "e2e.gn2"), "cn=e2e.gn2,"+gnested)
+	})
+
 	t.Run("bulk", func(t *testing.T) {
 		csv := tmpFile(t, "login\ne2e.gamma\ne2e.delta\n")
 		has(t, run(t, admin, adPW, "users", "import", csv), "imported 2")

@@ -42,6 +42,51 @@ func EscapeValue(v string) string {
 	return b.String()
 }
 
+// Split splits a DN into its first RDN and the parent DN below it:
+// `cn=bob,ou=users,dc=x` -> ("cn=bob", "ou=users,dc=x"). A DN with no parent
+// returns ("", "") for the parent.
+//
+// It honors RFC 4514 escaping, which a `strings.SplitN(dn, ",", 2)` does not: in
+// `cn=acme\,inc,ou=groups,dc=x` the first comma is part of the NAME, and cutting
+// there yields the parent `inc,ou=groups,dc=x` — a DN that does not exist. A
+// multi-valued RDN (`cn=a+uid=b,…`) is likewise kept whole.
+func Split(dn string) (rdn, parent string) {
+	esc := false
+	for i := range len(dn) {
+		switch {
+		case esc:
+			esc = false
+		case dn[i] == '\\':
+			esc = true
+		case dn[i] == ',':
+			return dn[:i], dn[i+1:]
+		}
+	}
+	return dn, ""
+}
+
+// Parent returns the DN above dn, or "" when it has none.
+func Parent(dn string) string {
+	_, parent := Split(dn)
+	return parent
+}
+
+// ReplaceRDN returns the DN an in-place modrdn produces: rdn where dn's first
+// RDN was, same parent.
+//
+// The parent comes from the DN the server gave us, never from re-deriving the
+// path: an entry found by subtree search may sit under a nested OU, and
+// rebuilding its DN from the configured base silently names a different entry.
+//
+// rdn is taken as-is: escape its value with EscapeValue first.
+func ReplaceRDN(dn, rdn string) string {
+	parent := Parent(dn)
+	if parent == "" {
+		return rdn
+	}
+	return rdn + "," + parent
+}
+
 // Join builds a DN from an escaped RDN and the parent DN parts. Empty parts are
 // dropped, so a caller can pass an optional OU without branching.
 //

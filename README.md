@@ -150,8 +150,11 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 | `import-ldif <file> [--stop-on-error]`                                                            | add entries from an LDIF file                                                                                                                        |
 | `version`                                                                                         | print version                                                                                                                                        |
 
-> `user` subcommands resolve a login within `user_ou`. If you `user move` someone
-> out of it, manage them by DN with `search`/`entry` instead.
+> `user` subcommands resolve a login **anywhere under** `user_ou`, sub-OUs
+> included — so `user move toto.titi ou=eu,ou=users,…` keeps them manageable, and
+> `rename`/`set`/`delete` follow them there. Move someone *out* of `user_ou`
+> entirely and the `user` scope stops finding them: manage those by DN with
+> `search`/`entry`. The same goes for `group` under `group_ou`.
 
 ### entry (generic write/read on any DN — the escape hatch)
 
@@ -175,7 +178,7 @@ cover. Uses the data bind; `--config-bind` targets `cn=config`.
 | `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy                                                                                                                                                                                                                                                                                        |
 | `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                                       |
 | `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                               |
-| `user rename <old> <new.login>` `[--no-fix-acl] [--no-fix-refs]`                                                     | cn modrdn + refresh derived attrs; re-points the `olcAccess` rules **and** the group memberships naming the old DN                                                                                                                                                                                                                                                                                       |
+| `user rename <old> <new.login>` `[--no-fix-acl] [--no-fix-refs]`                                                     | cn modrdn **in place** (the user keeps its OU, sub-OUs included) + refresh derived attrs; re-points the `olcAccess` rules **and** the group memberships naming the old DN                                                                                                                                                                                                                                 |
 | `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                    |
 | `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                |
 | `user move <login> <new-parent-dn>` `[--no-fix-acl]`                                                                 | modrdn to another OU (keeps RDN); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                                                      |
@@ -361,6 +364,16 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **A rename keeps the entry where it is — including in a sub-OU.** `user`/`group`
+  resolve a name by subtree search, so the entry may live below the configured
+  OU (that is what `user move` is for). A rename is an in-place modrdn, so the
+  new DN is the old one's parent with a new RDN — it is never rebuilt from
+  `user_ou`/`group_ou`. Getting that wrong was not cosmetic: the modrdn went
+  through, the follow-up attribute refresh then aimed at a DN that did not exist,
+  and you were left with an entry renamed but still carrying the old login's
+  `uid`/`sn`/`mail`, behind an error naming a DN you never typed. If that refresh
+  does fail now, the message says the entry **is** renamed and what is stale on
+  it, rather than reading as though nothing happened.
 - **`users export | users import` is a round-trip now — it used not to be.** The
   two carried unrelated CSV layouts that happened to be the same width: export
   wrote `uid,cn,sn,givenName,displayName,mail`, import read column 1 as a
