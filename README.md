@@ -255,8 +255,8 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                                        |
 | `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                                  |
 | `ops who-can-write <dn> [--attr <name>]`                               | evaluate `olcAccess` for an entry the way slapd does (first matching rule decides, `by * break` falls through) and report who can write it. Says **CANNOT SAY** rather than guess at a rule needing the entry's attributes (`filter=`) or a regex |
-| `ops replication`                                                      | local `contextCSN`; multi-peer drift is HA-only                                         |
-| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics)          |
+| `ops replication`                                                      | decodes `contextCSN` per contributing server-ID and reads the syncrepl config to report a **role** (standalone/replica/provider/mirror) — and flags a replica that has never synced. Cross-server drift needs running it on each node and comparing a SID's time |
+| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics). Says the backend is not enabled instead of printing blanks when it is absent |
 
 ### config (cn=config — needs the config bind)
 
@@ -513,6 +513,18 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   slapd (observed intermittently, any database, under concurrent load). The new
   size is persisted to `cn=config` and applied regardless, and the command warns
   first. Prefer a quiet maintenance window.
+- **`ops replication` reports from one server — it cannot see drift by itself.**
+  A `contextCSN` is one value per contributing server-ID, and the timestamp is
+  how far that SID's changes have propagated *here*. To know a replica is behind,
+  you compare the same SID's time on the replica against the provider — which
+  needs the command run on each node. From one connection it reports what it can
+  prove: the role (standalone / replica / provider / mirror), decoded per SID
+  with each one's age, and the one failure a single server *does* reveal — a node
+  configured as a replica (`olcSyncrepl`) that carries no `contextCSN` has never
+  completed an initial sync. It no longer hardcodes "standalone"; that verdict
+  now follows from the config actually being empty. (And `ops monitor` says the
+  monitor backend is absent, rather than printing blank counters, when
+  `cn=Monitor` does not resolve.)
 - **`backup data` reads through the bind's ACLs — take it as the rootDN.** The
   dump is an ordinary LDAP search, so slapd applies the bind's access controls to
   it: entries the identity cannot see are absent, and attributes it cannot read —
@@ -760,7 +772,8 @@ openldap-cli search '(uid=toto.titi)' --operational         # + entryUUID, pwdCh
 openldap-cli search '(objectClass=olcModuleList)' --base cn=config --config-bind
 openldap-cli -o json search '(&(objectClass=inetOrgPerson)(title=SRE))' | jq -r '.entries[].dn'
 openldap-cli ops accesslog-purge --keep-days 30 --dry-run   # count first, then drop --dry-run
-openldap-cli ops replication                                # local contextCSN (drift check is HA-only)
+openldap-cli ops replication                                # role + decoded contextCSN per SID
+# for a real HA drift check, run it on each node and compare a SID's timestamp
 ```
 
 ### Backup & restore (no docker/alpine — just the CLI)

@@ -917,7 +917,26 @@ func TestCLI(t *testing.T) {
 		}
 		has(t, run(t, admin, adPW, "ops", "audit-binds", "--since", "1h"), "binds in last")
 		has(t, run(t, admin, adPW, "ops", "accesslog-purge", "--dry-run"), "dry-run")
-		has(t, run(t, admin, adPW, "ops", "replication"), "contextCSN")
+
+		// replication reports a role from the facts, not a hardcoded "standalone
+		// — no peers". The test env has no syncrepl, so the role IS standalone —
+		// but it must come with no false drift claim, and JSON must carry it (the
+		// old `note` field was declared and never assigned -> always "").
+		rep := run(t, admin, adPW, "ops", "replication")
+		has(t, rep, "standalone")
+		if strings.Contains(rep, "no peers to compare") {
+			t.Errorf("replication still prints the hardcoded note:\n%s", rep)
+		}
+		var repJSON struct {
+			Role string `json:"role"`
+		}
+		rj := run(t, admin, adPW, "-o", "json", "ops", "replication")
+		if err := json.Unmarshal([]byte(rj), &repJSON); err != nil {
+			t.Fatalf("parse replication json: %v\n%s", err, rj)
+		}
+		if repJSON.Role != "standalone" {
+			t.Errorf("replication JSON role = %q, want standalone", repJSON.Role)
+		}
 	})
 
 	t.Run("backup", func(t *testing.T) {

@@ -13,6 +13,7 @@ import (
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldaptime"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
+	"github.com/MaximeWewer/openldap-cli/internal/syncrepl"
 )
 
 var opsCmd = &cobra.Command{
@@ -439,6 +440,18 @@ var opsMonitorCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
+		// The monitor backend is not built into every server (needs the module +
+		// `database monitor`). Without it, cn=Monitor does not resolve — probe it
+		// once and say so, rather than emit a report of blank placeholders.
+		if _, perr := cc.ReadEntry("cn=Monitor", []string{"cn"}); perr != nil {
+			if ldapx.IsNoSuchObject(perr) {
+				return fmt.Errorf("the monitor backend is not enabled on this server, so there are no\n" +
+					"runtime stats to read (cn=Monitor does not resolve). Enable it with the\n" +
+					"`back-monitor` module and a `database monitor` / olcDatabase={N}monitor entry.")
+			}
+			return fmt.Errorf("read cn=Monitor: %w", perr)
+		}
+
 		read := func(dn, attr string) string {
 			e, err := cc.ReadEntry(dn, []string{attr})
 			if err != nil {
@@ -512,9 +525,15 @@ func (r monitorResult) Text() string {
 
 var opsReplicationCmd = &cobra.Command{
 	Use:   "replication",
-	Short: "Show local contextCSN values (multi-peer drift check is HA-only)",
-	Long:  "Reads contextCSN at the base DN. A standalone server has no peers to\ncompare against; this just surfaces the local CSNs.",
-	Args:  cobra.NoArgs,
+	Short: "Decode contextCSN and report this server's replication role",
+	Long: "Reads contextCSN at the base DN and decodes it per contributing server\n" +
+		"(each carries a server-ID and a change time), and reads the syncrepl config\n" +
+		"from cn=config to say whether this server replicates from anywhere.\n\n" +
+		"It does NOT reach across to peers, so it cannot by itself declare a replica\n" +
+		"in sync or behind: that needs the same command on each server, comparing a\n" +
+		"given SID's time. What it can catch from here is named below — a configured\n" +
+		"provider that has never delivered data, or a server wrongly assumed solo.",
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := connect()
 		if err != nil {
@@ -526,30 +545,107 @@ var opsReplicationCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return out.Emit(replicationResult{
-			BaseDN:     cli.Config().BaseDN,
-			ContextCSN: e.GetAll("contextCSN"),
-		})
+		res := replicationResult{BaseDN: cli.Config().BaseDN, ContextCSN: e.GetAll("contextCSN")}
+
+		// the syncrepl config lives in cn=config; without it we can still decode
+		// the CSNs, just not name the configured providers
+		if cc, cerr := connectConfig(); cerr == nil {
+			defer cc.Close()
+			if db, derr := cc.DataDatabaseDN(cli.Config().BaseDN); derr == nil {
+				if de, rerr := cc.ReadEntry(db, []string{"olcSyncrepl", "olcServerID", "olcMirrorMode", "olcMultiProvider"}); rerr == nil {
+					res.Syncrepl = de.GetAll("olcSyncrepl")
+					res.ServerID = de.GetAll("olcServerID")
+					res.MirrorMode = strings.EqualFold(de.Get("olcMirrorMode"), "TRUE") ||
+						strings.EqualFold(de.Get("olcMultiProvider"), "TRUE")
+				}
+			}
+		} else {
+			res.Note = "syncrepl config not checked (no config bind): the provider list and the" +
+				" 'configured but never delivered' check need it."
+		}
+		res.assess()
+		return out.Emit(res)
 	},
 }
 
 type replicationResult struct {
 	BaseDN     string   `json:"baseDN" yaml:"baseDN"`
 	ContextCSN []string `json:"contextCSN" yaml:"contextCSN"`
-	Note       string   `json:"note" yaml:"note"`
+	Syncrepl   []string `json:"syncrepl,omitempty" yaml:"syncrepl,omitempty"`
+	ServerID   []string `json:"serverID,omitempty" yaml:"serverID,omitempty"`
+	MirrorMode bool     `json:"mirrorMode,omitempty" yaml:"mirrorMode,omitempty"`
+	// Role is the factual verdict: standalone | provider | replica | mirror.
+	Role string `json:"role" yaml:"role"`
+	// Warnings are things wrong or suspicious that a single connection CAN see.
+	Warnings []string `json:"warnings,omitempty" yaml:"warnings,omitempty"`
+	Note     string   `json:"note,omitempty" yaml:"note,omitempty"`
+}
+
+// syncreplRIDProvider pulls the rid and provider URI out of one olcSyncrepl
+// value for display. The value is `rid=NNN provider=ldap://… searchbase=… …`.
+func syncreplRIDProvider(v string) string {
+	rid, provider := "", ""
+	for _, tok := range strings.Fields(v) {
+		switch {
+		case strings.HasPrefix(tok, "rid="):
+			rid = strings.TrimPrefix(tok, "rid=")
+		case strings.HasPrefix(tok, "provider="):
+			provider = strings.TrimPrefix(tok, "provider=")
+		}
+	}
+	if rid == "" && provider == "" {
+		return v // unfamiliar shape — show it whole rather than nothing
+	}
+	return fmt.Sprintf("rid=%s %s", rid, provider)
+}
+
+// assess fills Role and Warnings from the facts read.
+func (r *replicationResult) assess() {
+	r.Role, r.Warnings = syncrepl.Assess(r.ContextCSN, len(r.Syncrepl) > 0, r.MirrorMode)
 }
 
 func (r replicationResult) Text() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s contextCSN:\n", r.BaseDN)
+	fmt.Fprintf(&b, "%s — %s\n", r.BaseDN, r.Role)
+	if len(r.ServerID) > 0 {
+		fmt.Fprintf(&b, "  serverID: %s\n", strings.Join(r.ServerID, ", "))
+	}
+
+	b.WriteString("  contextCSN:\n")
 	if len(r.ContextCSN) == 0 {
-		fmt.Fprintf(&b, "  (none)\n")
+		b.WriteString("    (none — no syncprov overlay, or nothing has been written yet)\n")
 	}
-	for _, c := range r.ContextCSN {
-		fmt.Fprintf(&b, "  %s\n", c)
+	for _, c := range syncrepl.ParseAll(r.ContextCSN) {
+		if c.OK {
+			fmt.Fprintf(&b, "    SID %s  %s  (%s ago)\n", c.SID,
+				c.Time.Format("2006-01-02 15:04:05Z"), ldaptime.Human(time.Since(c.Time)))
+		} else {
+			fmt.Fprintf(&b, "    %s  (could not decode)\n", c.Raw)
+		}
 	}
-	fmt.Fprintf(&b, "note: standalone — no peers to compare; HA drift check needs >=2 servers")
-	return b.String()
+
+	if len(r.Syncrepl) > 0 {
+		b.WriteString("  replicates from:\n")
+		for _, s := range r.Syncrepl {
+			fmt.Fprintf(&b, "    %s\n", syncreplRIDProvider(s))
+		}
+	}
+
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&b, "  WARNING: %s\n", w)
+	}
+	switch r.Role {
+	case "standalone":
+		b.WriteString("  No replication configured here. (If this should be a replica, its\n" +
+			"  olcSyncrepl is missing.)\n")
+	default:
+		b.WriteString("  Drift vs. a peer is not visible from one server: run `ops replication`\n" +
+			"  on each and compare a given SID's time — a lagging replica's is older.\n")
+	}
+	if r.Note != "" {
+		fmt.Fprintf(&b, "  %s\n", r.Note)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func init() {
