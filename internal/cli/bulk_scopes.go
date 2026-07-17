@@ -217,16 +217,34 @@ var usersForceResetCmd = &cobra.Command{
 	},
 }
 
+var usersSetForce bool
+
 var usersSetCmd = &cobra.Command{
 	Use:   "set <attr> <value> [login...]",
 	Short: "Set (or clear, if value empty) an attribute on many users",
-	Args:  cobra.MinimumNArgs(2),
+	Long: "Replaces the attribute on each user. Like the singular `user set`, a replace\n" +
+		"that would drop values of a multi-valued attribute is refused, naming them\n" +
+		"and the user — `mail` and `telephoneNumber` hold several values, and one\n" +
+		"`users set` would otherwise take the extras off everyone at once.\n" +
+		"--force applies it anyway.",
+	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		attr, value, logins := args[0], args[1], args[2:]
+		values := []string{value}
+		if value == "" {
+			values = nil
+		}
 		return runUserBatch("set "+attr, logins, &usersSetSel, func(cli *ldapx.Client, e *ldapx.Entry) error {
 			mod := ldapx.Mod{Op: ldapx.ModReplace, Name: attr, Values: []string{value}}
 			if value == "" {
 				mod = ldapx.Mod{Op: ldapx.ModDelete, Name: attr}
+			}
+			// same guard as `user set` — a batch is where an unnoticed drop hurts
+			// most, so it is the last place to skip it
+			if !usersSetForce {
+				if err := guardReplace(cli, e.DN, attr, values); err != nil {
+					return err
+				}
 			}
 			return cli.Modify(e.DN, []ldapx.Mod{mod})
 		})
@@ -360,6 +378,8 @@ func init() {
 	usersUnlockSel.bind(usersUnlockCmd, true)
 	usersForceResetSel.bind(usersForceResetCmd, false)
 	usersSetSel.bind(usersSetCmd, false)
+	usersSetCmd.Flags().BoolVar(&usersSetForce, "force", false,
+		"replace even if it drops values of a multi-valued attribute")
 	usersPasswdSel.bind(usersPasswdCmd, false)
 	usersCmd.AddCommand(usersDeleteCmd, usersUnlockCmd, usersForceResetCmd, usersSetCmd, usersPasswdCmd)
 

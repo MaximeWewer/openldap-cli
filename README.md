@@ -191,11 +191,11 @@ Plural commands act on many targets at once (the singular forms act on one).
 | `users delete [login…] [--group\|--filter] [--yes]`               | by explicit logins and/or a selector                                                             |
 | `users unlock [login…] [--group\|--filter\|--all-locked] [--yes]` |                                                                                                  |
 | `users force-reset [login…] [--group\|--filter] [--yes]`          |                                                                                                  |
-| `users set <attr> <value> [login…] [--group\|--filter] [--yes]`   | empty value = delete the attribute                                                               |
+| `users set <attr> <value> [login…] [--group\|--filter] [--yes] [--force]` | empty value = delete the attribute. Refuses per user when the replace would drop values of a multi-valued attribute (`mail`, `telephoneNumber`) — same guard as `user set`; `--force` applies it |
 | `users passwd [login…] [--group\|--filter] [--yes]`               | generates a fresh password per user (printed)                                                    |
 | `users list [--group\|--locked\|--posix]`                         | filtered listing                                                                                 |
-| `users import <csv> [--stop-on-error]`                            | rows: `firstname.lastname[,group][,mail-override]`                                               |
-| `users export [--group] [--with-hash] [--ldif]`                   | CSV → stdout (global `-o` N/A); `--with-hash` exposes hashes; `--ldif` writes re-importable LDIF |
+| `users import <csv> [--stop-on-error]`                            | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order — what `export` writes. Headerless files stay positional: `login[,group][,mail]` |
+| `users export [--group] [--with-hash] [--ldif]`                   | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). Group memberships are not in the CSV — they live on the group entries; `--ldif` writes full entries instead |
 | `groups list [--members]` / `svcs list`                           | listings                                                                                         |
 | `groups delete <name…>` / `svcs delete <name…>`                   | bulk delete by name                                                                              |
 
@@ -361,6 +361,21 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **`users export | users import` is a round-trip now — it used not to be.** The
+  two carried unrelated CSV layouts that happened to be the same width: export
+  wrote `uid,cn,sn,givenName,displayName,mail`, import read column 1 as a
+  **group** and column 2 as a **mail**. So the obvious migration — export from
+  one server, import into the next — put `sn` where the mail goes, and because
+  `mail` is an IA5String with no format check, slapd accepted `mail: Titi` on
+  every user and the import reported success. Columns are now read **by name**
+  off the header row, in any order; a headerless file keeps the documented
+  positional `login[,group][,mail]`. A header is a first row whose **first** cell
+  names the login (`login`/`uid`/`user`/`username`) — that requirement is what
+  keeps a real data row from being eaten as one. `--with-hash` round-trips too:
+  the exported `userPassword` is a hash, import stores it as one, and the user
+  binds with the same password on the new server. What CSV cannot carry is group
+  membership — that lives on the group entries, not the users' — so `--ldif` is
+  the full copy.
 - **A deleted user stays in its groups — and re-creating the login walks it back
   in.** A `groupOfNames` names its members by DN, and nothing in LDAP keeps those
   DNs honest. Delete a user and every group still carries `member: cn=<gone>,…`;
@@ -511,11 +526,16 @@ internal/
   config/   profile loading (yaml + env)
   ldapx/    thin go-ldap/v3 wrapper (connect, search, modify, modrdn, ...)
   domain/   YOUR conventions — naming + schema (edit here)
-  acl/      olcAccess surgery        (unit-tested)
+  acl/      olcAccess surgery + evaluation (unit-tested)
+  limits/   olcLimits surgery        (unit-tested)
   ldif/     LDIF read/write          (unit-tested)
+  usercsv/  user CSV column mapping  (unit-tested)
   dn/       RFC 4514 DN escaping     (unit-tested)
   pwd/      password generation      (unit-tested)
-  schema/   schema NAME parser       (unit-tested)
+  schema/   schema NAME / SINGLE-VALUE parser (unit-tested)
+  overlay/  overlay catalog + defaults (unit-tested)
+  humanize/ byte sizes               (unit-tested)
+  ldaptime/ generalizedTime          (unit-tested)
   output/   text/json/yaml rendering
 tests/      faithful test OpenLDAP (compose + bootstrap)
 ```
@@ -571,10 +591,15 @@ openldap-cli ou delete externals --parent ou=users,dc=example,dc=org
 ### Bulk (plural scopes)
 
 ```bash
-# CSV: rows are  firstname.lastname[,group][,mail-override]
+# CSV: headerless rows are  firstname.lastname[,group][,mail]
 openldap-cli users import staff.csv
+# ...or a header, read by name, in any order:  uid,mail,group
 openldap-cli users list --group devs
 openldap-cli users list --locked
+
+# move people between servers: the export imports back as itself
+openldap-cli --profile old users export --with-hash > staff.csv
+openldap-cli --profile new users import staff.csv            # passwords included
 
 # act on many: explicit list and/or a selector (selectors need --yes)
 openldap-cli users set title Intern alice.smith bob.jones
