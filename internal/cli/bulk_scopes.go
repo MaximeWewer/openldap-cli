@@ -180,9 +180,21 @@ var usersDeleteCmd = &cobra.Command{
 	Use:     "delete [login...]",
 	Aliases: []string{"del", "rm"},
 	Short:   "Delete many users (by login and/or --group/--filter)",
+	Long: "Deletes each user and drops it from the groups naming it — same repair as\n" +
+		"the singular `user delete`, and skipped the same way with --no-fix-refs.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runUserBatch("deleted", args, &usersDeleteSel, func(cli *ldapx.Client, e *ldapx.Entry) error {
-			return cli.Delete(e.DN)
+			if err := cli.Delete(e.DN); err != nil {
+				return err
+			}
+			// a membership left naming a deleted user re-grants that access to
+			// whoever takes the login next
+			fixes, err := fixMemberRefsIfNeeded(cli, e.DN, "")
+			if err != nil {
+				return err
+			}
+			_, err = refFixDetail(fixes)
+			return err
 		})
 	},
 }

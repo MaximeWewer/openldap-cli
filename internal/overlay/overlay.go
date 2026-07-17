@@ -24,6 +24,28 @@ import "strings"
 // overlay ships as <name>.so (memberof.so, refint.so, unique.so, …).
 func Module(name string) string { return name + ".so" }
 
+// Defaults returns the settings an overlay needs in order to do anything at all,
+// applied when its entry is created.
+//
+// refint is the one that matters: slapo-refint(5) maintains integrity only "for
+// the named attributes", so an olcRefintAttribute-less refint is enabled,
+// reported by `overlay list` as active, and tracks nothing — verified against a
+// live 2.6, where deleting a group member with refint on but unconfigured left
+// the membership dangling. Enabling an overlay that then does nothing is a
+// worse outcome than not offering to enable it, so it is configured up front.
+//
+// The attributes are the DN-valued ones this CLI's model actually uses: `member`
+// for groupOfNames, `uniqueMember` for groupOfUniqueNames, `owner` and `manager`
+// where an entry points at a person.
+func Defaults(name string) map[string][]string {
+	if name == "refint" {
+		return map[string][]string{
+			"olcRefintAttribute": {"member", "uniqueMember", "owner", "manager"},
+		}
+	}
+	return nil
+}
+
 // Name strips the ordering prefix from an olcOverlay value: "{0}memberof" ->
 // "memberof". Values without a prefix are returned as-is.
 func Name(value string) string {

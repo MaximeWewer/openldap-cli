@@ -18,9 +18,14 @@ var userDeleteCmd = &cobra.Command{
 	Use:     "delete <login>",
 	Aliases: []string{"del", "rm"},
 	Short:   "Delete a user by login (uid or cn)",
-	Long: "Delete a user. The refint overlay removes the user's group memberships\n" +
-		"automatically; a group left with no members violates groupOfNames and may\n" +
-		"need separate cleanup.",
+	Long: "Delete a user, and drop it from the groups that name it.\n\n" +
+		"Nothing in LDAP keeps a `member` DN honest: unless the server maintains\n" +
+		"them (refint, or memberof's olcMemberOfRefInt), a deleted user stays in\n" +
+		"every group it belonged to — and re-creating the login walks it straight\n" +
+		"back into them. So the memberships are checked, and repaired from here when\n" +
+		"the server does not do it. --no-fix-refs skips that.\n\n" +
+		"A group left with no members violates groupOfNames, so one whose only member\n" +
+		"was this user is reported rather than emptied.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		login := strings.ToLower(strings.TrimSpace(args[0]))
@@ -35,20 +40,36 @@ var userDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := cli.Delete(entry.DN); err != nil {
+		if err = cli.Delete(entry.DN); err != nil {
 			return fmt.Errorf("delete %s: %w", entry.DN, err)
 		}
 		log.Debug().Str("dn", entry.DN).Msg("user deleted")
 
-		return out.Emit(deleteResult{DN: entry.DN})
+		fixes, err := fixMemberRefsIfNeeded(cli, entry.DN, "")
+		if err != nil {
+			return err
+		}
+		detail, err := refFixDetail(fixes)
+		if err != nil {
+			return err
+		}
+		return out.Emit(deleteResult{DN: entry.DN, Fixed: fixes, Detail: detail})
 	},
 }
 
 type deleteResult struct {
-	DN string `json:"dn" yaml:"dn"`
+	DN     string   `json:"dn" yaml:"dn"`
+	Fixed  []refFix `json:"groupsFixed,omitempty" yaml:"groupsFixed,omitempty"`
+	Detail string   `json:"-" yaml:"-"`
 }
 
-func (r deleteResult) Text() string { return "deleted " + r.DN }
+func (r deleteResult) Text() string {
+	s := "deleted " + r.DN
+	if r.Detail != "" {
+		s += "\n  " + r.Detail
+	}
+	return s
+}
 
 // ---- info ---------------------------------------------------------------
 
@@ -220,7 +241,7 @@ var userRenameCmd = &cobra.Command{
 
 		// modrdn cn=<old> -> cn=<new>, dropping the old cn value.
 		newRDN := "cn=" + nu.UID
-		if err := cli.Rename(entry.DN, newRDN, true, ""); err != nil {
+		if err = cli.Rename(entry.DN, newRDN, true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", entry.DN, err)
 		}
 		newDN := nu.DN(cfg.UserOU, cfg.BaseDN)
@@ -239,14 +260,22 @@ var userRenameCmd = &cobra.Command{
 		if nu.Mail != "" {
 			mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "mail", Values: []string{nu.Mail}})
 		}
-		if err := cli.Modify(newDN, mods); err != nil {
+		if err = cli.Modify(newDN, mods); err != nil {
 			return fmt.Errorf("refresh attrs on %s: %w", newDN, err)
 		}
 		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user renamed")
-		if err := fixACLRefs(entry.DN, newDN); err != nil {
+		if err = fixACLRefs(entry.DN, newDN); err != nil {
 			return err
 		}
-		return out.Emit(okResult{Action: "renamed to", DN: newDN})
+		fixes, err := fixMemberRefsIfNeeded(cli, entry.DN, newDN)
+		if err != nil {
+			return err
+		}
+		detail, err := refFixDetail(fixes)
+		if err != nil {
+			return err
+		}
+		return out.Emit(okResult{Action: "renamed to", DN: newDN, Detail: detail})
 	},
 }
 
@@ -272,20 +301,29 @@ var userMoveCmd = &cobra.Command{
 			return err
 		}
 		rdn := strings.SplitN(entry.DN, ",", 2)[0] // keep the existing RDN
-		if err := cli.Rename(entry.DN, rdn, false, newParent); err != nil {
+		if err = cli.Rename(entry.DN, rdn, false, newParent); err != nil {
 			return fmt.Errorf("move %s: %w", entry.DN, err)
 		}
 		newDN := rdn + "," + newParent
 		log.Debug().Str("from", entry.DN).Str("to", newDN).Msg("user moved")
-		if err := fixACLRefs(entry.DN, newDN); err != nil {
+		if err = fixACLRefs(entry.DN, newDN); err != nil {
 			return err
 		}
-		return out.Emit(okResult{Action: "moved to", DN: newDN})
+		fixes, err := fixMemberRefsIfNeeded(cli, entry.DN, newDN)
+		if err != nil {
+			return err
+		}
+		detail, err := refFixDetail(fixes)
+		if err != nil {
+			return err
+		}
+		return out.Emit(okResult{Action: "moved to", DN: newDN, Detail: detail})
 	},
 }
 
 func init() {
 	userSetCmd.Flags().BoolVar(&userSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	withFixACLFlag(userRenameCmd, userMoveCmd)
+	withFixRefsFlag(userRenameCmd, userMoveCmd, userDeleteCmd)
 	userCmd.AddCommand(userDeleteCmd, userInfoCmd, userSetCmd, userRenameCmd, userMoveCmd)
 }

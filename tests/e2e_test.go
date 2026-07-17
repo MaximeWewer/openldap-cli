@@ -109,13 +109,18 @@ func slapaclAllows(t *testing.T, identity, target, attr string) bool {
 }
 
 func cleanup() {
+	// Groups first: a user that is some group's only member cannot be deleted
+	// without emptying it, which the groupOfNames schema forbids — so a leftover
+	// group would block the user deletes below.
+	for _, g := range []string{"e2e.devs", "e2e.eng", "e2e.refs", "e2e.solo"} {
+		try(admin, adPW, "group", "delete", g)
+	}
 	// delete each individually — a single missing login would abort a variadic
 	// `users delete`, leaving the rest behind.
-	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak", "e2e.lockme"} {
+	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak", "e2e.lockme",
+		"e2e.ref1", "e2e.ref2", "e2e.ref3"} {
 		try(admin, adPW, "user", "delete", u)
 	}
-	try(admin, adPW, "group", "delete", "e2e.devs")
-	try(admin, adPW, "group", "delete", "e2e.eng") // a failed rename subtest leaves this name
 	try(admin, adPW, "svc", "revoke", "e2e.svc") // a failed svc subtest would leave its grants behind
 	try(admin, adPW, "svc", "delete", "e2e.svc")
 	for _, o := range []string{"e2e.unit", "e2e.renamed"} {
@@ -436,6 +441,83 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "search", "(cn=e2e.kid)"), "cn=e2e.kid,ou=e2e.renamed,"+parent)
 		run(t, admin, adPW, "entry", "delete", "cn=e2e.kid,ou=e2e.renamed,"+parent)
 		run(t, admin, adPW, "ou", "delete", "e2e.renamed", "--parent", parent)
+	})
+
+	// Nothing in LDAP keeps a `member` DN honest. slapd can, but only if
+	// configured, and there are TWO mechanisms — refint's olcRefintAttribute and
+	// memberof's olcMemberOfRefInt. The seed has both, which is exactly why this
+	// turns them off: with them on, no repair is needed and the code under test
+	// never runs.
+	t.Run("member-refs", func(t *testing.T) {
+		memberof := "olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config"
+		refint := "olcOverlay={1}refint,olcDatabase={1}mdb,cn=config"
+		refintAttrs := entryValues(t, refint, "olcRefintAttribute")
+
+		run(t, root, rtPW, "config", "set", memberof, "olcMemberOfRefInt", "FALSE")
+		// --force: clearing 3 values is exactly what the replace guard refuses,
+		// and here that is the intent
+		run(t, root, rtPW, "entry", "set", refint, "olcRefintAttribute", "--config-bind", "--force")
+		// put back exactly what was there: the rest of the suite (and the next
+		// run) assumes the seed's overlays
+		defer func() {
+			run(t, root, rtPW, "config", "set", memberof, "olcMemberOfRefInt", "TRUE")
+			for _, a := range refintAttrs {
+				run(t, root, rtPW, "entry", "set", refint, "olcRefintAttribute", "--add", "--config-bind", a)
+			}
+			if got := entryValues(t, refint, "olcRefintAttribute"); len(got) != len(refintAttrs) {
+				t.Errorf("refint not restored: have %v, want %v", got, refintAttrs)
+			}
+		}()
+
+		// its own users: the shared e2e.* ones are renamed and deleted by other
+		// subtests, and depending on that chain is how this ends up asserting
+		// against whatever happens to be left
+		run(t, admin, adPW, "user", "add", "e2e.ref1", "--no-password")
+		defer try(admin, adPW, "user", "delete", "e2e.ref1", "--no-fix-refs")
+		run(t, admin, adPW, "user", "add", "e2e.ref2", "--no-password")
+		defer try(admin, adPW, "user", "delete", "e2e.ref2", "--no-fix-refs")
+
+		run(t, admin, adPW, "group", "create", "e2e.refs", "--member", "e2e.ref1")
+		defer try(admin, adPW, "group", "delete", "e2e.refs")
+		run(t, admin, adPW, "group", "add-member", "e2e.refs", "e2e.ref2")
+
+		// rename: the membership must follow, or e2e.ref2 silently loses whatever
+		// the group grants
+		has(t, run(t, admin, adPW, "user", "rename", "e2e.ref2", "e2e.ref3"), "repointed")
+		defer try(admin, adPW, "user", "delete", "e2e.ref3", "--no-fix-refs")
+		got := run(t, admin, adPW, "group", "info", "e2e.refs")
+		has(t, got, "cn=e2e.ref3")
+		if strings.Contains(got, "cn=e2e.ref2,") {
+			t.Errorf("membership still names the old DN:\n%s", got)
+		}
+
+		// delete: the membership must go, or re-creating the login walks back in
+		has(t, run(t, admin, adPW, "user", "delete", "e2e.ref3"), "removed")
+		if got = run(t, admin, adPW, "group", "info", "e2e.refs"); strings.Contains(got, "e2e.ref3") {
+			t.Errorf("deleted user is still a member:\n%s", got)
+		}
+
+		// --no-fix-refs leaves it alone, and claims no repair
+		run(t, admin, adPW, "user", "add", "e2e.ref3", "--no-password")
+		run(t, admin, adPW, "group", "add-member", "e2e.refs", "e2e.ref3")
+		if out := run(t, admin, adPW, "user", "delete", "e2e.ref3", "--no-fix-refs"); strings.Contains(out, "repaired") {
+			t.Errorf("--no-fix-refs still repaired:\n%s", out)
+		}
+		has(t, run(t, admin, adPW, "group", "info", "e2e.refs"), "cn=e2e.ref3")
+
+		// a groupOfNames must keep a member, so emptying one is refused by the
+		// schema — and that must NOT be reported as a clean delete
+		run(t, admin, adPW, "group", "create", "e2e.solo", "--member", "e2e.ref1")
+		defer try(admin, adPW, "group", "delete", "e2e.solo")
+		_, se, err := try(admin, adPW, "user", "delete", "e2e.ref1")
+		if err == nil {
+			t.Error("deleting the last member of a group reported success")
+		}
+		has(t, se, "only member")
+		// the user IS gone: the repair runs after the delete, not instead of it
+		if _, _, err = try(admin, adPW, "user", "info", "e2e.ref1"); err == nil {
+			t.Error("user survived the failed reference repair")
+		}
 	})
 
 	t.Run("ppolicy", func(t *testing.T) {
@@ -791,6 +873,20 @@ func TestCLI(t *testing.T) {
 
 // aclValues returns the database's olcAccess rule bodies, in index order and
 // without the {N} prefixes — the form `entry set` takes to write them back.
+// entryValues reads one attribute's values off a cn=config entry, so a subtest
+// can put back exactly what it found.
+func entryValues(t *testing.T, dn, attr string) []string {
+	t.Helper()
+	var res struct {
+		Attrs map[string][]string `json:"attrs"`
+	}
+	out := run(t, root, rtPW, "-o", "json", "entry", "get", dn, "--config-bind")
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("parse entry get %s: %v\n%s", dn, err, out)
+	}
+	return res.Attrs[attr]
+}
+
 func aclValues(t *testing.T, db string) []string {
 	t.Helper()
 	var res struct {

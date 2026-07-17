@@ -345,9 +345,27 @@ var svcDeleteCmd = &cobra.Command{
 		log.Debug().Str("dn", dn).Msg("service account deleted")
 
 		res := svcResult{Action: "deleted", DN: dn}
+		// notes accumulate: the membership repair and the ACL cleanup are two
+		// separate pieces of news, and the second must not swallow the first
+		var notes []string
+
+		// a service account can be a group member too, and the same dangling
+		// reference re-grants that access to the next account with this name
+		fixes, ferr := fixMemberRefsIfNeeded(cli, dn, "")
+		if ferr != nil {
+			return ferr
+		}
+		detail, derr := refFixDetail(fixes)
+		if derr != nil {
+			return derr
+		}
+		if detail != "" {
+			notes = append(notes, detail)
+		}
+
 		cc, err := connectConfig()
 		if err != nil {
-			res.Note = "entry deleted, but ACL cleanup skipped: " + err.Error()
+			res.Note = strings.Join(append(notes, "entry deleted, but ACL cleanup skipped: "+err.Error()), "\n  ")
 			return out.Emit(res)
 		}
 		defer cc.Close()
@@ -357,10 +375,11 @@ var svcDeleteCmd = &cobra.Command{
 			return fmt.Errorf("entry deleted, but ACL cleanup failed: %w", err)
 		}
 		log.Debug().Int("clauses", removed).Int("dropped", dropped).Msg("acl cleaned")
-		res.Note = fmt.Sprintf("removed %d ACL clause(s)", removed)
+		n := fmt.Sprintf("removed %d ACL clause(s)", removed)
 		if dropped > 0 {
-			res.Note += fmt.Sprintf(", dropped %d now-empty rule(s)", dropped)
+			n += fmt.Sprintf(", dropped %d now-empty rule(s)", dropped)
 		}
+		res.Note = strings.Join(append(notes, n), "\n  ")
 		return out.Emit(res)
 	},
 }

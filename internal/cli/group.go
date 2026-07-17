@@ -226,8 +226,10 @@ var groupSetCmd = &cobra.Command{
 var groupRenameCmd = &cobra.Command{
 	Use:   "rename <name> <new-name>",
 	Short: "Rename a group (cn modrdn)",
-	Long: "Renames cn=<name> to cn=<new-name>. Members are untouched, and their\n" +
-		"memberOf follows the new DN (the memberof overlay maintains it).\n\n" +
+	Long: "Renames cn=<name> to cn=<new-name>. The members themselves are untouched.\n\n" +
+		"Their memberOf follows the new DN only if the server maintains references\n" +
+		"(refint, or memberof's olcMemberOfRefInt) — see `user delete`. Any group\n" +
+		"that named THIS group as a member is re-pointed from here when it does not.\n\n" +
 		"The olcAccess rules granting `group.exact=\"cn=<name>,…\"` are re-pointed at\n" +
 		"the new DN: slapd rewrites none of them, so such a rule would keep naming a\n" +
 		"DN that no longer exists and every member would silently lose that access.\n" +
@@ -250,15 +252,23 @@ var groupRenameCmd = &cobra.Command{
 			return err
 		}
 		// deleteOldRDN: the old cn must go, or the group answers to both names
-		if err := cli.Rename(g.DN, "cn="+dnpkg.EscapeValue(newName), true, ""); err != nil {
+		if err = cli.Rename(g.DN, "cn="+dnpkg.EscapeValue(newName), true, ""); err != nil {
 			return fmt.Errorf("rename %s: %w", g.DN, err)
 		}
 		newDN := "cn=" + dnpkg.EscapeValue(newName) + "," + cli.GroupBase()
 		log.Debug().Str("from", g.DN).Str("to", newDN).Msg("group renamed")
-		if err := fixACLRefs(g.DN, newDN); err != nil {
+		if err = fixACLRefs(g.DN, newDN); err != nil {
 			return err
 		}
-		return out.Emit(okResult{Action: "renamed to", DN: newDN})
+		fixes, err := fixMemberRefsIfNeeded(cli, g.DN, newDN)
+		if err != nil {
+			return err
+		}
+		detail, err := refFixDetail(fixes)
+		if err != nil {
+			return err
+		}
+		return out.Emit(okResult{Action: "renamed to", DN: newDN, Detail: detail})
 	},
 }
 
@@ -268,7 +278,12 @@ var groupDeleteCmd = &cobra.Command{
 	Use:     "delete <name>",
 	Aliases: []string{"del", "rm"},
 	Short:   "Delete a group",
-	Args:    cobra.ExactArgs(1),
+	Long: "Deletes the group, and drops it from any group that named it as a member\n" +
+		"(a groupOfNames may hold another group's DN). --no-fix-refs skips that.\n\n" +
+		"The olcAccess rules naming the group are NOT removed — a rule granting\n" +
+		"`group.exact=\"cn=<name>,…\"` simply stops matching. `config acl lint` finds\n" +
+		"them; `config acl revoke --group <name>` removes them.",
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := connect()
 		if err != nil {
@@ -279,11 +294,19 @@ var groupDeleteCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := cli.Delete(g.DN); err != nil {
+		if err = cli.Delete(g.DN); err != nil {
 			return fmt.Errorf("delete %s: %w", g.DN, err)
 		}
 		log.Debug().Str("dn", g.DN).Msg("group deleted")
-		return out.Emit(okResult{Action: "deleted", DN: g.DN})
+		fixes, err := fixMemberRefsIfNeeded(cli, g.DN, "")
+		if err != nil {
+			return err
+		}
+		detail, err := refFixDetail(fixes)
+		if err != nil {
+			return err
+		}
+		return out.Emit(okResult{Action: "deleted", DN: g.DN, Detail: detail})
 	},
 }
 
@@ -311,6 +334,7 @@ func init() {
 	groupListCmd.Flags().BoolVar(&groupListMembers, "members", false, "include member DNs")
 	groupSetCmd.Flags().BoolVar(&groupSetForce, "force", false, "replace even if it drops values of a multi-valued attribute")
 	withFixACLFlag(groupRenameCmd)
+	withFixRefsFlag(groupRenameCmd, groupDeleteCmd)
 	groupCmd.AddCommand(groupCreateCmd, groupAddMemberCmd, groupRemoveMemberCmd,
 		groupSetCmd, groupRenameCmd, groupDeleteCmd, groupInfoCmd)
 	rootCmd.AddCommand(groupCmd)

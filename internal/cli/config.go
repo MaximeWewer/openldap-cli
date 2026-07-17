@@ -414,7 +414,10 @@ var configOverlayEnableCmd = &cobra.Command{
 			log.Info().Str("module", st.Module).Msg("module loaded (stays loaded until slapd restarts)")
 		}
 		log.Debug().Str("db", db).Str("overlay", name).Str("action", st.Action).Msg("overlay enable")
-		return out.Emit(okResult{Action: "overlay " + name + " " + st.Action + ":", DN: st.DN})
+		// an overlay created with settings is configured, not merely switched on:
+		// say which, since those settings are what makes it do anything
+		return out.Emit(okResult{Action: "overlay " + name + " " + st.Action + ":", DN: st.DN,
+			Detail: strings.Join(st.Settings, "\n  ")})
 	},
 }
 

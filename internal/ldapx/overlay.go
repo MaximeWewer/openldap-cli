@@ -99,6 +99,10 @@ type OverlayState struct {
 	DN     string // the overlay entry
 	Action string // created | re-enabled | disabled | deleted | unchanged
 	Module string // module we had to load to get here ("" if none)
+	// Settings are the defaults written with a newly created overlay, so the
+	// caller can report an overlay that was configured rather than merely
+	// switched on (see overlay.Defaults).
+	Settings []string
 }
 
 // EnableOverlay makes the named overlay active on dbDN, creating its entry or
@@ -156,6 +160,18 @@ func (c *Client) EnableOverlay(dbDN, name string, loadModule bool) (OverlayState
 	}
 	// class may still be "" for the few overlays with no settings of their own
 	// (they are configured by olcOverlayConfig alone); let the server rule.
+
+	// Some overlays are inert until configured — an enabled refint with no
+	// olcRefintAttribute maintains nothing. Creating one that silently does
+	// nothing is worse than not creating it, so it goes in configured. The
+	// settings hang off the config class, so there must be one.
+	if class != "" {
+		for k, v := range overlay.Defaults(name) {
+			attrs[k] = v
+			st.Settings = append(st.Settings, fmt.Sprintf("%s: %s", k, strings.Join(v, " ")))
+		}
+		sort.Strings(st.Settings)
+	}
 
 	// the RDN goes in unindexed; slapd assigns the {N} and renames the entry.
 	dn := fmt.Sprintf("olcOverlay=%s,%s", name, dbDN)

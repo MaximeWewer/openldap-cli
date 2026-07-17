@@ -23,9 +23,12 @@ func withFixACLFlag(cmds ...*cobra.Command) {
 //
 // slapd rewrites nothing on its own: a rule saying `by group.exact="cn=old,…"`
 // or `to dn.subtree="ou=old,…"` keeps naming a DN that no longer exists, so it
-// stops matching and the access it granted is silently lost. (memberOf is not
-// affected — the memberof overlay maintains it across a rename.) Leaving that
-// to the operator means leaving it undone, so this runs by default.
+// stops matching and the access it granted is silently lost. Leaving that to the
+// operator means leaving it undone, so this runs by default.
+//
+// Group MEMBERSHIP is a separate reference with its own repair — see refint.go.
+// It is not automatic either: `member` follows a rename only when the server was
+// configured to maintain it.
 //
 // It is called AFTER the rename: repairing first would point the rules at a DN
 // that does not exist yet if the rename then failed. The rename is the caller's
