@@ -271,7 +271,9 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
 | `config set <dn> <attr> [value…]` `[--add] [--force]`                          | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`). `set` **replaces the whole attribute** — on a multi-valued one it drops every value you do not pass, so it is **refused** when that would lose values, naming them; `--add` appends, `--force` overrides |
 | `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                           |
-| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap; `--for` writes a per-identity `olcLimits`                                                     |
+| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap. `--for` writes a per-identity `olcLimits`: an existing clause for that identity is **updated** (a second one would never be reached), the limits you do not pass are kept, and a new clause is **placed above** anything that would shadow it |
+| `config limits delete [--db] --for <selector>`                                 | remove every `olcLimits` clause for that identity (every one: an older CLI appended duplicates)                          |
+| `config limits lint [--db]`                                                    | report `olcLimits` clauses slapd can never reach — the ordering trap, same as `config acl lint`                          |
 
 ### backup (logical LDIF over the wire — no docker/shell/volume needed)
 
@@ -359,6 +361,17 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **`olcLimits` is that same trap, in a second attribute.** It is ordered too,
+  and slapd "examines each clause in turn until it finds one that matches" — so a
+  `*` clause above a per-identity one silently swallows it. It is quieter than
+  the ACL version: an identity matching no clause falls back to the database's
+  global `olcSizeLimit` rather than being denied, so the app keeps working, just
+  at the wrong ceiling. `config limits set --for` therefore **updates** an
+  existing clause instead of appending a second one that could never be reached
+  (which is what re-running it used to do), keeps the limits you did not pass,
+  and places a new clause **above** whatever would shadow it. `config limits
+  lint` finds clauses already stranded, and `config limits delete --for` removes
+  them — every duplicate for that identity, not just the first.
 - **Names with `,` `+` `\` `"` `;` `<` `>` are fine.** A DN is assembled from
   text, so such a character in a name would otherwise become DN *syntax* — the
   entry lands elsewhere, or slapd rejects the lot with a bare `Invalid DN
@@ -625,6 +638,13 @@ openldap-cli --profile prod-root config acl grant 'olcDatabase={1}mdb,cn=config'
   'ou=app,dc=example,dc=org' --group readers --access read
 openldap-cli --profile prod-root config db resize 'olcDatabase={2}mdb,cn=config' 4GiB # olcDbMaxSize
 openldap-cli --profile prod-root config limits set --size 5000                        # raise the search cap
+
+# per-identity limits: ordered, first match wins — `lint` finds the ones never reached
+openldap-cli config limits set --db 'olcDatabase={1}mdb,cn=config' \
+  --for 'dn.exact=cn=app,dc=example,dc=org' --size unlimited
+openldap-cli config limits lint --db 'olcDatabase={1}mdb,cn=config'
+openldap-cli config limits delete --db 'olcDatabase={1}mdb,cn=config' \
+  --for 'dn.exact=cn=app,dc=example,dc=org'
 
 openldap-cli schema list-classes
 openldap-cli schema show inetOrgPerson

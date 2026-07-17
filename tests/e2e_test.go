@@ -580,6 +580,69 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "config", "limits", "get"), "olcSizeLimit")
 	})
 
+	// olcLimits is ordered and slapd stops at the first clause matching the
+	// identity — olcAccess's trap in a second attribute.
+	t.Run("limits-ordering", func(t *testing.T) {
+		db := "olcDatabase={1}mdb,cn=config"
+		app := "dn.exact=cn=e2e.lim,dc=example,dc=org"
+		defer try(admin, adPW, "config", "limits", "delete", "--db", db, "--for", app)
+		defer try(admin, adPW, "config", "limits", "delete", "--db", db, "--for", "*")
+
+		has(t, run(t, admin, adPW, "config", "limits", "set", "--db", db, "--for", app, "--size", "500"), "added")
+		// re-setting the same identity must UPDATE: a second clause would sit
+		// below the first and never be reached
+		has(t, run(t, admin, adPW, "config", "limits", "set", "--db", db, "--for", app, "--size", "5000"), "updated")
+		got := run(t, admin, adPW, "config", "limits", "get", "--db", db)
+		if strings.Count(got, "cn=e2e.lim") != 1 {
+			t.Errorf("re-set appended a dead clause instead of updating:\n%s", got)
+		}
+		has(t, got, "size=5000")
+
+		// setting only --time must not drop the size= already there
+		run(t, admin, adPW, "config", "limits", "set", "--db", db, "--for", app, "--time", "60")
+		got = run(t, admin, adPW, "config", "limits", "get", "--db", db)
+		if !strings.Contains(got, "size=5000") || !strings.Contains(got, "time=60") {
+			t.Errorf("--time dropped the size limit:\n%s", got)
+		}
+
+		// a catch-all matches everyone, so a new specific clause has to be
+		// placed ABOVE it or it is dead on arrival
+		run(t, admin, adPW, "config", "limits", "set", "--db", db, "--for", "*", "--size", "100")
+		out := run(t, admin, adPW, "config", "limits", "set", "--db", db,
+			"--for", "dn.exact=cn=e2e.lim2,dc=example,dc=org", "--size", "9000")
+		has(t, out, "would have decided first")
+		defer try(admin, adPW, "config", "limits", "delete", "--db", db, "--for", "dn.exact=cn=e2e.lim2,dc=example,dc=org")
+		got = run(t, admin, adPW, "config", "limits", "get", "--db", db)
+		if strings.Index(got, "cn=e2e.lim2") > strings.Index(got, "* size=100") {
+			t.Errorf("new clause landed below the catch-all that shadows it:\n%s", got)
+		}
+		has(t, run(t, admin, adPW, "config", "limits", "lint", "--db", db), "all reachable")
+
+		// lint has to SEE a dead clause, not just fail to make one. The CLI no
+		// longer creates one, so add it the way an older CLI did: a raw append
+		// (--config-bind, since cn=config is out of the data bind's reach).
+		run(t, admin, adPW, "entry", "set", db, "olcLimits", "--add", app+" size=1", "--config-bind")
+		has(t, run(t, admin, adPW, "config", "limits", "lint", "--db", db), "[dead]")
+
+		// delete takes every duplicate for the identity, and only those
+		has(t, run(t, admin, adPW, "config", "limits", "delete", "--db", db, "--for", app), "removed 2")
+		got = run(t, admin, adPW, "config", "limits", "get", "--db", db)
+		if strings.Contains(got, "cn=e2e.lim,") {
+			t.Errorf("delete left a clause behind:\n%s", got)
+		}
+		has(t, got, "cn=e2e.lim2") // the other identity is untouched
+		has(t, run(t, admin, adPW, "config", "limits", "lint", "--db", db), "all reachable")
+
+		if _, se, err := try(admin, adPW, "config", "limits", "delete", "--db", db, "--for", app); err == nil ||
+			!strings.Contains(se, "no olcLimits clause for") {
+			t.Errorf("deleting an absent clause: err=%v stderr=%s", err, se)
+		}
+		if _, se, err := try(admin, adPW, "config", "limits", "set", "--db", db, "--for", "nonsense", "--size", "5"); err == nil ||
+			!strings.Contains(se, "unrecognized selector") {
+			t.Errorf("bad selector: err=%v stderr=%s", err, se)
+		}
+	})
+
 	t.Run("schema", func(t *testing.T) {
 		has(t, run(t, admin, adPW, "schema", "list-classes"), "inetOrgPerson")
 		has(t, run(t, admin, adPW, "schema", "show", "inetOrgPerson"), "NAME 'inetOrgPerson'")

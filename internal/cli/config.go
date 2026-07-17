@@ -11,6 +11,7 @@ import (
 	"github.com/MaximeWewer/openldap-cli/internal/acl"
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
+	"github.com/MaximeWewer/openldap-cli/internal/limits"
 	"github.com/MaximeWewer/openldap-cli/internal/overlay"
 )
 
@@ -96,33 +97,180 @@ var configLimitsSetCmd = &cobra.Command{
 		}
 		defer cc.Close()
 
-		var mods []ldapx.Mod
-		var detail string
 		if limitsFor != "" {
-			val := limitsFor
-			if limitsSize != "" {
-				val += " size=" + limitsSize
-			}
-			if limitsTime != "" {
-				val += " time=" + limitsTime
-			}
-			mods = append(mods, ldapx.Mod{Op: ldapx.ModAdd, Name: "olcLimits", Values: []string{val}})
-			detail = "olcLimits += " + val
-		} else {
-			if limitsSize != "" {
-				mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "olcSizeLimit", Values: []string{limitsSize}})
-			}
-			if limitsTime != "" {
-				mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "olcTimeLimit", Values: []string{limitsTime}})
-			}
-			detail = fmt.Sprintf("size=%s time=%s", limitsSize, limitsTime)
+			return setPerIdentityLimit(cc)
+		}
+
+		var mods []ldapx.Mod
+		var parts []string
+		if limitsSize != "" {
+			mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "olcSizeLimit", Values: []string{limitsSize}})
+			parts = append(parts, "size="+limitsSize)
+		}
+		if limitsTime != "" {
+			mods = append(mods, ldapx.Mod{Op: ldapx.ModReplace, Name: "olcTimeLimit", Values: []string{limitsTime}})
+			parts = append(parts, "time="+limitsTime)
 		}
 		if err := cc.Modify(limitsDB, mods); err != nil {
 			return fmt.Errorf("set limits on %s: %w", limitsDB, err)
 		}
 		log.Debug().Str("db", limitsDB).Msg("limits updated")
-		return out.Emit(okResult{Action: "limits set", DN: limitsDB, Detail: detail})
+		// only what was actually written: reporting `time=` on a --size-only run
+		// implies olcTimeLimit was touched
+		return out.Emit(okResult{Action: "limits set", DN: limitsDB, Detail: strings.Join(parts, " ")})
 	},
+}
+
+// limitSpecs turns --size/--time into olcLimits spec tokens.
+func limitSpecs() []string {
+	var set []string
+	if limitsSize != "" {
+		set = append(set, "size="+limitsSize)
+	}
+	if limitsTime != "" {
+		set = append(set, "time="+limitsTime)
+	}
+	return set
+}
+
+// readLimits returns the database's current olcLimits values.
+func readLimits(cc *ldapx.Client) ([]string, error) {
+	e, err := cc.ReadEntry(limitsDB, []string{"olcLimits"})
+	if err != nil {
+		return nil, fmt.Errorf("read olcLimits on %s: %w", limitsDB, err)
+	}
+	return e.GetAll("olcLimits"), nil
+}
+
+// writeLimits replaces olcLimits with bodies in one modify — the server
+// renumbers {0},{1},… in this order. The whole list is written back because the
+// order IS the meaning: slapd stops at the first clause that matches.
+func writeLimits(cc *ldapx.Client, bodies []string) error {
+	mod := ldapx.Mod{Op: ldapx.ModReplace, Name: "olcLimits", Values: bodies}
+	if len(bodies) == 0 {
+		mod = ldapx.Mod{Op: ldapx.ModDelete, Name: "olcLimits"}
+	}
+	if err := cc.Modify(limitsDB, []ldapx.Mod{mod}); err != nil {
+		return fmt.Errorf("write olcLimits on %s: %w", limitsDB, err)
+	}
+	return nil
+}
+
+// setPerIdentityLimit upserts the olcLimits clause for --for.
+//
+// olcLimits is ordered and slapd stops at the first clause matching the
+// identity, so this cannot just append: a second clause for the same identity is
+// one the server never reaches, and adding it reported success while changing
+// nothing.
+func setPerIdentityLimit(cc *ldapx.Client) error {
+	current, err := readLimits(cc)
+	if err != nil {
+		return err
+	}
+	who := limits.ParseWho(limitsFor)
+	bodies, res, err := limits.Upsert(current, who, limitSpecs())
+	if err != nil {
+		return err
+	}
+	if res.Action == "unchanged" {
+		return out.Emit(okResult{Action: "limits unchanged", DN: limitsDB, Detail: res.After})
+	}
+	if err := writeLimits(cc, bodies); err != nil {
+		return err
+	}
+	log.Debug().Str("db", limitsDB).Str("action", res.Action).Msg("olcLimits upserted")
+
+	detail := res.After
+	switch {
+	case res.Action == "updated":
+		detail = fmt.Sprintf("%s\n  was: %s", res.After, res.Before)
+	case res.ShadowedBy != "":
+		detail = fmt.Sprintf("%s\n  placed at {%d}, above `%s`, which matches the same identity and\n  would have decided first — appended at the end it would never be reached",
+			res.After, res.At, res.ShadowedBy)
+	}
+	return out.Emit(okResult{Action: "olcLimits " + res.Action, DN: limitsDB, Detail: detail})
+}
+
+var configLimitsDeleteCmd = &cobra.Command{
+	Use:     "delete",
+	Aliases: []string{"del", "rm"},
+	Short:   "Delete the olcLimits clause for an identity (--for)",
+	Long: "Removes every olcLimits clause matching the selector. Every one, not the\n" +
+		"first: an older CLI appended instead of updating, so the same identity may\n" +
+		"carry duplicates that slapd never reaches.",
+	Args:    cobra.NoArgs,
+	Example: "  openldap-cli config limits delete --db 'olcDatabase={1}mdb,cn=config' --for 'dn.exact=cn=app,dc=example,dc=org'",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if limitsFor == "" {
+			return fmt.Errorf("pass --for <selector> (the identity whose clause to delete)")
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+
+		current, err := readLimits(cc)
+		if err != nil {
+			return err
+		}
+		bodies, removed, err := limits.Remove(current, limits.ParseWho(limitsFor))
+		if err != nil {
+			return err
+		}
+		if err := writeLimits(cc, bodies); err != nil {
+			return err
+		}
+		// okResult indents Detail itself, so the first line carries none
+		items := make([]string, 0, len(removed))
+		for _, r := range removed {
+			items = append(items, "- "+r.Body)
+		}
+		log.Debug().Str("db", limitsDB).Int("removed", len(removed)).Msg("olcLimits deleted")
+		return out.Emit(okResult{Action: fmt.Sprintf("removed %d olcLimits clause(s) from", len(removed)),
+			DN: limitsDB, Detail: strings.Join(items, "\n  ")})
+	},
+}
+
+var configLimitsLintCmd = &cobra.Command{
+	Use:   "lint",
+	Short: "Report olcLimits clauses slapd can never reach",
+	Long: "slapd examines the clauses in order and stops at the first one matching the\n" +
+		"identity, so a broader clause above a narrower one silently swallows it —\n" +
+		"the narrower limit is set, reported by `get`, and has no effect.",
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+		current, err := readLimits(cc)
+		if err != nil {
+			return err
+		}
+		return out.Emit(limitsLintResult{DB: limitsDB, Checked: len(current), Findings: limits.Lint(current)})
+	},
+}
+
+type limitsLintResult struct {
+	DB       string           `json:"db" yaml:"db"`
+	Checked  int              `json:"checked" yaml:"checked"`
+	Findings []limits.Finding `json:"findings,omitempty" yaml:"findings,omitempty"`
+}
+
+func (r limitsLintResult) Text() string {
+	if len(r.Findings) == 0 {
+		return fmt.Sprintf("%s\n  %d olcLimits clause(s), all reachable", r.DB, r.Checked)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n", r.DB)
+	for _, f := range r.Findings {
+		fmt.Fprintf(&b, "  [dead] {%d} %s\n         %s\n", f.Index, f.Limit, f.Message)
+	}
+	fmt.Fprintf(&b, "\n  Re-run `config limits set --for <selector> …` to re-place a clause above the\n"+
+		"  one shadowing it, or `config limits delete --for <selector>` to drop it.")
+	return b.String()
 }
 
 // ---- db / overlay / acl introspection -----------------------------------
@@ -810,7 +958,10 @@ func init() {
 	configLimitsSetCmd.Flags().StringVar(&limitsTime, "time", "", "olcTimeLimit value (seconds or unlimited)")
 	configLimitsSetCmd.Flags().StringVar(&limitsFor, "for", "", "apply as olcLimits for this selector (e.g. dn.exact=...)")
 
-	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd)
+	configLimitsDeleteCmd.Flags().StringVar(&limitsDB, "db", "olcDatabase={-1}frontend,cn=config", "database entry to modify")
+	configLimitsDeleteCmd.Flags().StringVar(&limitsFor, "for", "", "the olcLimits selector to remove (e.g. dn.exact=...)")
+	configLimitsLintCmd.Flags().StringVar(&limitsDB, "db", "olcDatabase={-1}frontend,cn=config", "database entry to read")
+	configLimitsCmd.AddCommand(configLimitsGetCmd, configLimitsSetCmd, configLimitsDeleteCmd, configLimitsLintCmd)
 	configDBCmd.AddCommand(configDBListCmd, configDBResizeCmd)
 	for _, c := range []*cobra.Command{configOverlayEnableCmd, configOverlayDisableCmd} {
 		c.Flags().StringVar(&overlayDB, "db", "", "database entry to act on (default: the one holding base_dn)")
