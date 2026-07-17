@@ -1,10 +1,10 @@
 # openldap-cli
 
-**Manage OpenLDAP from one fast, typed command — no more `ldapmodify` LDIF golf,
+**Manage OpenLDAP from one fast, typed command - no more `ldapmodify` LDIF golf,
 no more brittle bash wrappers.**
 
-A single static Go binary that turns everyday directory work — users, groups,
-service accounts, password policies, ACLs, diagnostics — into clean commands with
+A single static Go binary that turns everyday directory work - users, groups,
+service accounts, password policies, ACLs, diagnostics - into clean commands with
 sane defaults and machine-readable output. Point it at any OpenLDAP server.
 
 ```bash
@@ -16,27 +16,27 @@ openldap-cli users delete --filter '(title=Intern)' --yes
 
 ### Why
 
-- **One binary, zero deps.** Static Go — drop it anywhere, including your LDAP container.
+- **One binary, zero deps.** Static Go - drop it anywhere, including your LDAP container.
 - **Opinionated, not cryptic.** `user add`, `group create`, `svc add` instead of
   hand-rolled LDIF; strong passwords, schema-aware `--set`, posix accounts on demand.
 - **Built for scripting.** `-o json|yaml|text`, logs on stderr / data on stdout,
   exit codes you can trust. Bulk verbs (`users`, `groups`, `svcs`) for fleet changes.
 - **Goes where the GUIs stop.** `cn=config` ACL surgery, ppolicy lifecycle,
-  `cn=Monitor` stats, accesslog audits — first-class commands.
+  `cn=Monitor` stats, accesslog audits - first-class commands.
 - **Multi-environment.** Named profiles (`--profile prod`), env overrides, a
   separate config bind for `cn=config` writes.
 - **Scales past the size limit.** Bulk reads and `backup` page automatically and
-  transparently lift `olcSizeLimit` via the config bind — no truncated lists, no
+  transparently lift `olcSizeLimit` via the config bind - no truncated lists, no
   manual server tuning.
 
 ## Install
 
-Grab a static binary from the [Releases](../../releases) page — no runtime, no
+Grab a static binary from the [Releases](../../releases) page - no runtime, no
 dependencies (amd64 + arm64 each; verify against `checksums.txt`):
 
-- **Linux / macOS** — `openldap-cli_<ver>_<os>_<arch>.tar.gz`
+- **Linux / macOS** - `openldap-cli_<ver>_<os>_<arch>.tar.gz`
   (`tar xzf …` → `./openldap-cli`)
-- **Windows** — `openldap-cli_<ver>_windows_<arch>.exe`
+- **Windows** - `openldap-cli_<ver>_windows_<arch>.exe`
 
 Or build it:
 
@@ -48,9 +48,9 @@ make install    # -> $GOBIN/openldap-cli
 ## Testing & checks
 
 ```bash
-make unit         # pure unit tests (no server): acl, config, domain, humanize,
-                  # ldaptime, ldapx façade, ldif, output, pwd, schema
-make integration  # ldapx façade vs the test LDAP — run `make test-up` first
+make unit         # pure unit tests (no server): acl, dn, domain, humanize,
+                  # ldaptime, ldif, limits, overlay, pwd, schema, syncrepl, usercsv
+make integration  # ldapx façade vs the test LDAP - run `make test-up` first
 make e2e          # build the binary + drive every command group end-to-end
 make lint         # golangci-lint (~23 linters; config in .golangci.yml)
 make security     # gosec
@@ -87,7 +87,7 @@ Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 ### SASL EXTERNAL over `ldapi://` (passwordless local admin)
 
 Set `sasl_external: true` (or `LDAP_SASL_EXTERNAL=true`) with an `ldapi://`
-URL to bind via **SASL/EXTERNAL** — the identity comes from the Unix-socket
+URL to bind via **SASL/EXTERNAL** - the identity comes from the Unix-socket
 peer credentials, so `bind_dn`/`bind_pw` (and even `config_bind_dn`) are not
 needed. Run as **root on the LDAP host** to manage `cn=config` with no stored
 password, the CLI equivalent of `ldapsearch -Y EXTERNAL -H ldapi:///`:
@@ -95,7 +95,7 @@ password, the CLI equivalent of `ldapsearch -Y EXTERNAL -H ldapi:///`:
 ```yaml
 profiles:
   local-root:
-    url: ldapi:///              # default socket /var/run/slapd/ldapi
+    url: ldapi:///                 # default socket /var/run/slapd/ldapi
     base_dn: dc=example,dc=org
     sasl_external: true
 ```
@@ -125,7 +125,7 @@ Set `config_bind_dn`/`config_bind_pw` (e.g. `cn=adminconfig,cn=config`) for:
 reads. Commands that only touch the data tree use the regular `bind_dn`.
 
 On the LDAP host you can skip the config bind entirely with **SASL EXTERNAL over
-`ldapi://`** — see [below](#sasl-external-over-ldapi-passwordless-local-admin).
+`ldapi://`** - see [below](#sasl-external-over-ldapi-passwordless-local-admin).
 
 ## Global flags
 
@@ -137,7 +137,7 @@ On the LDAP host you can skip the config bind entirely with **SASL EXTERNAL over
 | `--log-level`   | `info`                 | `trace`\|`debug`\|`info`\|`warn`\|`error` (logs → stderr) |
 | `--log-format`  | `console`              | `console` \| `json`                                       |
 
-Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays clean.
+Logs go to **stderr**, results to **stdout** - so `-o json … | jq` stays clean.
 
 ## Commands
 
@@ -145,69 +145,69 @@ Logs go to **stderr**, results to **stdout** — so `-o json … | jq` stays cle
 
 | Command                                                                                           | Notes                                                                                                                                                |
 | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `whoami`                                                                                          | bound identity (LDAP Who Am I ext-op) — connection sanity check                                                                                      |
+| `whoami`                                                                                          | bound identity (LDAP Who Am I ext-op) - connection sanity check                                                                                      |
 | `search <filter> [--base] [--scope base\|one\|sub] [--attrs a,b] [--operational] [--config-bind]` | raw search escape hatch; `--operational` also returns `+` attrs (`entryUUID`, `pwdChangedTime`, `contextCSN`…); `--config-bind` searches `cn=config` |
 | `import-ldif <file> [--stop-on-error]`                                                            | add entries from an LDIF file                                                                                                                        |
 | `version`                                                                                         | print version                                                                                                                                        |
 
 > `user` subcommands resolve a login **anywhere under** `user_ou`, sub-OUs
-> included — so `user move toto.titi ou=eu,ou=users,…` keeps them manageable, and
-> `rename`/`set`/`delete` follow them there. Move someone *out* of `user_ou`
+> included - so `user move toto.titi ou=eu,ou=users,…` keeps them manageable, and
+> `rename`/`set`/`delete` follow them there. Move someone _out_ of `user_ou`
 > entirely and the `user` scope stops finding them: manage those by DN with
 > `search`/`entry`. The same goes for `group` under `group_ou`.
 
-### entry (generic write/read on any DN — the escape hatch)
+### entry (generic write/read on any DN - the escape hatch)
 
 The write-side counterpart of `search`, for entries the typed commands don't
 cover. Uses the data bind; `--config-bind` targets `cn=config`.
 
-| Command                                                             | Notes                                                                                     |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `entry get <dn> [attr...]`                                          | read one entry (base scope; all attrs if none named) — like `ldapsearch`                  |
-| `entry add <dn> <attr=value>...`                                    | create an entry from `attr=value` pairs (repeat a name for multi-values) — like `ldapadd` |
-| `entry set <dn> <attr> [value...] [--add]`                          | replace an attribute; no value = delete it; `--add` appends — like `ldapmodify`           |
-| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn] [--no-fix-acl]` | modrdn / move — like `ldapmodrdn`; re-points the `olcAccess` rules naming the old DN (data entries only) |
-| `entry delete <dn>`                                                 | delete any leaf entry — like `ldapdelete`                                                 |
+| Command                                                                            | Notes                                                                                                    |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `entry get <dn> [attr...]`                                                         | read one entry (base scope; all attrs if none named) - like `ldapsearch`                                 |
+| `entry add <dn> <attr=value>...`                                                   | create an entry from `attr=value` pairs (repeat a name for multi-values) - like `ldapadd`                |
+| `entry set <dn> <attr> [value...] [--add]`                                         | replace an attribute; no value = delete it; `--add` appends - like `ldapmodify`                          |
+| `entry rename <dn> <new-rdn> [--newsuperior <dn>] [--keep-old-rdn] [--no-fix-acl]` | modrdn / move - like `ldapmodrdn`; re-points the `olcAccess` rules naming the old DN (data entries only) |
+| `entry delete <dn>`                                                                | delete any leaf entry - like `ldapdelete`                                                                |
 
 ### user
 
-| Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                                                 |
-| -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes — unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber; it needs the `nis` schema and **checks for it first**, naming it instead of failing on `Undefined Attribute Type` |
-| `user delete <login>` `[--no-fix-refs]`                                                                              | drops the user from the groups naming it — **checked**, not assumed: repaired from here unless the server maintains it (see Gotchas). A group whose only member it was is reported, not emptied                                                                                                                                                       |
-| `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy. The multi-valued identity attributes (`uid`, `cn`, `sn`, `givenName`, `mail`) show **every** value and are JSON arrays — a second `mail` is not hidden                                                                                                                                    |
-| `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it — no manual sizing                                                                                                                       |
-| `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                               |
-| `user rename <old> <new.login>` `[--no-fix-acl] [--no-fix-refs]`                                                     | cn modrdn **in place** (the user keeps its OU, sub-OUs included) + refresh derived attrs; re-points the `olcAccess` rules **and** the group memberships naming the old DN                                                                                                                                                                                                                                 |
-| `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                    |
-| `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                |
-| `user move <login> <new-parent-dn>` `[--no-fix-acl]`                                                                 | modrdn to another OU (keeps RDN); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                                                      |
+| Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes - unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber; it needs the `nis` schema and **checks for it first**, naming it instead of failing on `Undefined Attribute Type` |
+| `user delete <login>` `[--no-fix-refs]`                                                                              | drops the user from the groups naming it - **checked**, not assumed: repaired from here unless the server maintains it (see Gotchas). A group whose only member it was is reported, not emptied                                                                                                                                                                                                                                                     |
+| `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy. The multi-valued identity attributes (`uid`, `cn`, `sn`, `givenName`, `mail`) show **every** value and are JSON arrays - a second `mail` is not hidden                                                                                                                                                                                                                              |
+| `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it - no manual sizing                                                                                                                                                                                                                     |
+| `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `user rename <old> <new.login>` `[--no-fix-acl] [--no-fix-refs]`                                                     | cn modrdn **in place** (the user keeps its OU, sub-OUs included) + refresh derived attrs; re-points the `olcAccess` rules **and** the group memberships naming the old DN                                                                                                                                                                                                                                                                           |
+| `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                                                                                                                  |
+| `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `user move <login> <new-parent-dn>` `[--no-fix-acl]`                                                                 | modrdn to another OU (keeps RDN); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                                                                                                 |
 
-(Listing, import and export are inherently set-oriented — see `users` below.)
+(Listing, import and export are inherently set-oriented - see `users` below.)
 
-### users / groups / svcs (bulk — plural scopes)
+### users / groups / svcs (bulk - plural scopes)
 
 Plural commands act on many targets at once (the singular forms act on one).
 
-| Command                                                           | Notes                                                                                            |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `users delete [login…] [--group\|--filter] [--yes]`               | by explicit logins and/or a selector                                                             |
-| `users unlock [login…] [--group\|--filter\|--all-locked] [--yes]` |                                                                                                  |
-| `users force-reset [login…] [--group\|--filter] [--yes]`          |                                                                                                  |
-| `users set <attr> <value> [login…] [--group\|--filter] [--yes] [--force]` | empty value = delete the attribute. Refuses per user when the replace would drop values of a multi-valued attribute (`mail`, `telephoneNumber`) — same guard as `user set`; `--force` applies it |
-| `users passwd [login…] [--group\|--filter] [--yes]`               | generates a fresh password per user (printed)                                                    |
-| `users list [--group\|--locked\|--posix]`                         | filtered listing                                                                                 |
-| `users import <csv> [--stop-on-error]`                            | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order — what `export` writes. Headerless files stay positional: `login[,group][,mail]` |
-| `users export [--group] [--with-hash] [--ldif]`                   | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). Group memberships are not in the CSV — they live on the group entries; `--ldif` writes full entries instead |
-| `groups list [--members]` / `svcs list`                           | listings                                                                                         |
-| `groups delete <name…>` / `svcs delete <name…>`                   | bulk delete by name. `svcs delete` cleans up each account's `svc grant` ACL clauses and memberships, like the singular `svc delete`                 |
+| Command                                                                   | Notes                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users delete [login…] [--group\|--filter] [--yes]`                       | by explicit logins and/or a selector                                                                                                                                                                                                                                                                |
+| `users unlock [login…] [--group\|--filter\|--all-locked] [--yes]`         |                                                                                                                                                                                                                                                                                                     |
+| `users force-reset [login…] [--group\|--filter] [--yes]`                  |                                                                                                                                                                                                                                                                                                     |
+| `users set <attr> <value> [login…] [--group\|--filter] [--yes] [--force]` | empty value = delete the attribute. Refuses per user when the replace would drop values of a multi-valued attribute (`mail`, `telephoneNumber`) - same guard as `user set`; `--force` applies it                                                                                                    |
+| `users passwd [login…] [--group\|--filter] [--yes]`                       | generates a fresh password per user (printed)                                                                                                                                                                                                                                                       |
+| `users list [--group\|--locked\|--posix]`                                 | filtered listing                                                                                                                                                                                                                                                                                    |
+| `users import <csv> [--stop-on-error]`                                    | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order - what `export` writes. Headerless files stay positional: `login[,group][,mail]`                                                                   |
+| `users export [--group] [--with-hash] [--ldif]`                           | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). Group memberships are not in the CSV - they live on the group entries; `--ldif` writes full entries instead |
+| `groups list [--members]` / `svcs list`                                   | listings                                                                                                                                                                                                                                                                                            |
+| `groups delete <name…>` / `svcs delete <name…>`                           | bulk delete by name. `svcs delete` cleans up each account's `svc grant` ACL clauses and memberships, like the singular `svc delete`                                                                                                                                                                 |
 
 Selectors (`--group`/`--filter`/`--all-locked`) require **`--yes`** (they print
 the match count and refuse otherwise); explicit logins don't. `--stop-on-error`
 aborts on the first failure (default: continue, per-item result).
 
 Every bulk verb (`users`/`groups`/`svcs` delete/set/passwd/…, `users import`,
-`backup restore`, `import-ldif`) **exits non-zero if any item failed** — the
+`backup restore`, `import-ldif`) **exits non-zero if any item failed** - the
 per-item report still goes to stdout for a script to parse, the summary and the
 exit status to stderr. A named target that could not be acted on (already gone,
 already exists, refused) counts as a failure, so a job never reads a partial or
@@ -217,87 +217,87 @@ non-zero.
 
 ### group / ou
 
-| Command                                               | Notes                                          |
-| ----------------------------------------------------- | ---------------------------------------------- |
-| `group create <name> --member <login> …`              | groupOfNames needs ≥1 member                   |
-| `group info <name>`                                   | (listing is `groups list`)                     |
-| `group add-member <group> <login…>` / `remove-member` | removing the last member violates groupOfNames |
-| `group set <name> <attr> [value…]`                    | replace an attribute (no value deletes it). Use `add-member` for membership — this replaces the whole attribute |
-| `group rename <name> <new-name>` `[--no-fix-acl]`     | `cn` modrdn. `memberOf` follows on its own; the `olcAccess` rules naming the old DN are **re-pointed at the new one** (needs the config bind — see Gotchas) |
-| `group delete <name>`                                 |                                                |
-| `ou create <name> [--parent DN]`                      | parent must be ACL-writable by your bind       |
-| `ou info <name> [--parent]` / `ou set <name> <attr> [value…]` | read an OU / replace an attribute (no value deletes it) |
-| `ou rename <name> <new-name> [--parent] [--no-fix-acl]` | `ou` modrdn; entries below it follow, and so do the `olcAccess` rules naming them. To change parent, use `entry rename --newsuperior` |
-| `ou list` / `ou delete <name> [--parent]`             | delete refuses a non-empty OU                  |
+| Command                                                       | Notes                                                                                                                                                       |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group create <name> --member <login> …`                      | groupOfNames needs ≥1 member                                                                                                                                |
+| `group info <name>`                                           | (listing is `groups list`)                                                                                                                                  |
+| `group add-member <group> <login…>` / `remove-member`         | removing the last member violates groupOfNames                                                                                                              |
+| `group set <name> <attr> [value…]`                            | replace an attribute (no value deletes it). Use `add-member` for membership - this replaces the whole attribute                                             |
+| `group rename <name> <new-name>` `[--no-fix-acl]`             | `cn` modrdn. `memberOf` follows on its own; the `olcAccess` rules naming the old DN are **re-pointed at the new one** (needs the config bind - see Gotchas) |
+| `group delete <name>`                                         |                                                                                                                                                             |
+| `ou create <name> [--parent DN]`                              | parent must be ACL-writable by your bind                                                                                                                    |
+| `ou info <name> [--parent]` / `ou set <name> <attr> [value…]` | read an OU / replace an attribute (no value deletes it)                                                                                                     |
+| `ou rename <name> <new-name> [--parent] [--no-fix-acl]`       | `ou` modrdn; entries below it follow, and so do the `olcAccess` rules naming them. To change parent, use `entry rename --newsuperior`                       |
+| `ou list` / `ou delete <name> [--parent]`                     | delete refuses a non-empty OU                                                                                                                               |
 
 ### ppolicy (writes to `ou=policies` need a rootDN bind)
 
-| Command                                                                                                                                                                  | Notes                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- |
-| `ppolicy set <name> [--min-length --max-age --expire-warning --in-history --max-failure --lockout-duration --check-quality --lockout --must-change --allow-user-change]` | create or update; only the flags you pass are written |
-| `ppolicy assign <login> <policy> [--clear]`                                                                                                                              | sets `pwdPolicySubentry` (regular admin); the policy must resolve — see Gotchas |
-| `ppolicy list` / `ppolicy show <name>`                                                                                                                                   | list/show (any bind)                                  |
-| `ppolicy delete <name> [--force]`                                                                                                                                       | needs rootDN; refuses while users are assigned or while it is the overlay default |
-| `ppolicy check`                                                                                                                                                          | find policy references that do not resolve (those users have **no** policy) |
+| Command                                                                                                                                                                  | Notes                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `ppolicy set <name> [--min-length --max-age --expire-warning --in-history --max-failure --lockout-duration --check-quality --lockout --must-change --allow-user-change]` | create or update; only the flags you pass are written                             |
+| `ppolicy assign <login> <policy> [--clear]`                                                                                                                              | sets `pwdPolicySubentry` (regular admin); the policy must resolve - see Gotchas   |
+| `ppolicy list` / `ppolicy show <name>`                                                                                                                                   | list/show (any bind)                                                              |
+| `ppolicy delete <name> [--force]`                                                                                                                                        | needs rootDN; refuses while users are assigned or while it is the overlay default |
+| `ppolicy check`                                                                                                                                                          | find policy references that do not resolve (those users have **no** policy)       |
 
-### svc (service accounts — entry + `cn=config` ACL)
+### svc (service accounts - entry + `cn=config` ACL)
 
-| Command                                                         | Notes                                                                      |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `svc add <name> --subtree DN --access read\|write [--password]` | creates entry **and** injects an `olcAccess` clause; auto 32-char password |
-| `svc passwd <name> [--password]`                                |                                                                            |
-| `svc delete <name>`                                             | deletes entry **and** strips its ACL clauses                               |
-| `svc info <name>`                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)  |
-| `svc grant <name> --tree DN [--members-of <group>] [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs — the container rule (so the tree can be used as a search base) plus the entry rule — each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) |
-| `svc revoke <name> [--tree DN]`                                                | the counterpart of `svc grant`: `--tree` undoes **one** grant (both its rules), leaving the account's access to other trees alone; without `--tree` it removes every clause the account has on the database. Co-grantees in the same rule keep their access; rules left with no grantee are dropped |
+| Command                                                                                         | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `svc add <name> --subtree DN --access read\|write [--password]`                                 | creates entry **and** injects an `olcAccess` clause; auto 32-char password                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `svc passwd <name> [--password]`                                                                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `svc delete <name>`                                                                             | deletes entry **and** strips its ACL clauses                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `svc info <name>`                                                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `svc grant <name> --tree DN [--members-of <group>] [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs - the container rule (so the tree can be used as a search base) plus the entry rule - each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) |
+| `svc revoke <name> [--tree DN]`                                                                 | the counterpart of `svc grant`: `--tree` undoes **one** grant (both its rules), leaving the account's access to other trees alone; without `--tree` it removes every clause the account has on the database. Co-grantees in the same rule keep their access; rules left with no grantee are dropped                                                                                                                                                                                         |
 
-`olcAccess` is ordered: edits delete `{N}old` + add `{N}new` in one modify. New
-rules for an un-covered subtree are **appended at the end** — verify they
-evaluate before any broad catch-all. Deleting the sole grantee of a rule leaves
-an orphan `to <subtree> by * none` (same as the bash script).
+`olcAccess` is ordered and edited in place (delete `{N}old` + add `{N}new`). A
+new rule is auto-placed **above** whatever would shadow it, and `revoke` drops
+the rules it empties - so you don't hand-manage `{N}` indexes. See the ACL
+gotchas below.
 
-### ops (diagnostics — read via the config bind)
+### ops (diagnostics - read via the config bind)
 
-| Command                                                                | Notes                                                                                   |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `ops db-stats`                                                         | per-DB entries + used/max size (human-readable) and page usage % (catch `MDB_MAP_FULL`) |
-| `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                                        |
-| `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                                  |
-| `ops who-can-write <dn> [--attr <name>]`                               | evaluate `olcAccess` for an entry the way slapd does (first matching rule decides, `by * break` falls through) and report who can write it. Says **CANNOT SAY** rather than guess at a rule needing the entry's attributes (`filter=`) or a regex |
-| `ops replication`                                                      | decodes `contextCSN` per contributing server-ID and reads the syncrepl config to report a **role** (standalone/replica/provider/mirror) — and flags a replica that has never synced. Cross-server drift needs running it on each node and comparing a SID's time |
-| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics). Says the backend is not enabled instead of printing blanks when it is absent |
+| Command                                                                | Notes                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ops db-stats`                                                         | per-DB entries + used/max size (human-readable) and page usage % (catch `MDB_MAP_FULL`)                                                                                                                                                                          |
+| `ops audit-binds [--since 24h\|7d] [--user]`                           | bind summary from `cn=accesslog`                                                                                                                                                                                                                                 |
+| `ops accesslog-purge [--keep-days] [--sweep] [--dry-run] [--set SPEC]` | tunes `olcAccessLogPurge`; server purges on next sweep                                                                                                                                                                                                           |
+| `ops who-can-write <dn> [--attr <name>]`                               | evaluate `olcAccess` for an entry the way slapd does (first matching rule decides, `by * break` falls through) and report who can write it. Says **CANNOT SAY** rather than guess at a rule needing the entry's attributes (`filter=`) or a regex                |
+| `ops replication`                                                      | decodes `contextCSN` per contributing server-ID and reads the syncrepl config to report a **role** (standalone/replica/provider/mirror) - and flags a replica that has never synced. Cross-server drift needs running it on each node and comparing a SID's time |
+| `ops monitor`                                                          | runtime stats from `cn=Monitor` (connections, operations, threads, statistics). Says the backend is not enabled instead of printing blanks when it is absent                                                                                                     |
 
-### config (cn=config — needs the config bind)
+### config (cn=config - needs the config bind)
 
-| Command                                                                        | Notes                                                                                                                    |
-| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `config db list` / `config overlay list`                                       | introspect databases / overlays (`list` marks each overlay `active` or `DISABLED`)                                       |
-| `config db resize <db-dn> <size>`                                              | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env — can disrupt slapd under load (see Gotchas)     |
-| `config overlay enable <name> [--db <dn>] [--no-module]`                       | enable an overlay (memberof, refint, ppolicy, accesslog, unique, …) on the database holding `base_dn`; **loads its module first** if the schema is missing, and resolves its config `objectClass` from the server's schema. Idempotent; re-enables one turned off by `disable`. `--no-module` fails instead of loading. `refint` is created **configured** (`olcRefintAttribute`) — without attributes it is enabled and inert |
-| `config overlay disable <name> [--db <dn>] [--purge]`                          | set `olcDisabled: TRUE` — stops the overlay live but **keeps its settings**, so `enable` restores them. `--purge` deletes the entry and its settings instead. The module stays loaded either way (slapd refuses to unload one) |
-| `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
-| `config acl move <database-dn> <from> <to> [--force]`                          | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it. **Refused** when the move would silently change access: it names the clauses that would stop applying, or the rule that would become unreachable; `--force` applies it anyway |
-| `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); new rules end in `by * break` (additive) and are **auto-placed above the rule that would shadow them** — `--at N` overrides, and a grant that still cannot fire is reported |
-| `config acl delete <database-dn> <index> [--force]`                             | delete one rule, by the exact value the server holds (the rest are untouched; the server renumbers). Removing a **dead** rule — one `lint` reports — changes nothing and is the point: `revoke` keeps a deliberate `by * none`, so a dead rule has no other way out. Deleting a **live** rule is **refused**, naming the clauses that would stop applying; `--force` overrides |
-| `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one — slapd rejects a clauseless rule, which used to fail the whole revoke — or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access |
-| `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
-| `config set <dn> <attr> [value…]` `[--add] [--force]`                          | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`). `set` **replaces the whole attribute** — on a multi-valued one it drops every value you do not pass, so it is **refused** when that would lose values, naming them; `--add` appends, `--force` overrides |
-| `config limits get [--db]`                                                     | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                           |
-| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]` | raise the search size cap. `--for` writes a per-identity `olcLimits`: an existing clause for that identity is **updated** (a second one would never be reached), the limits you do not pass are kept, and a new clause is **placed above** anything that would shadow it |
-| `config limits delete [--db] --for <selector>`                                 | remove every `olcLimits` clause for that identity (every one: an older CLI appended duplicates)                          |
-| `config limits lint [--db]`                                                    | report `olcLimits` clauses slapd can never reach — the ordering trap, same as `config acl lint`                          |
+| Command                                                                                                                                                   | Notes                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `config db list` / `config overlay list`                                                                                                                  | introspect databases / overlays (`list` marks each overlay `active` or `DISABLED`)                                                                                                                                                                                                                                                                                                                                             |
+| `config db resize <db-dn> <size>`                                                                                                                         | set `olcDbMaxSize` (accepts `4GiB`/`512MiB`/bytes); remaps the LMDB env - can disrupt slapd under load (see Gotchas)                                                                                                                                                                                                                                                                                                           |
+| `config overlay enable <name> [--db <dn>] [--no-module]`                                                                                                  | enable an overlay (memberof, refint, ppolicy, accesslog, unique, …) on the database holding `base_dn`; **loads its module first** if the schema is missing, and resolves its config `objectClass` from the server's schema. Idempotent; re-enables one turned off by `disable`. `--no-module` fails instead of loading. `refint` is created **configured** (`olcRefintAttribute`) - without attributes it is enabled and inert |
+| `config overlay disable <name> [--db <dn>] [--purge]`                                                                                                     | set `olcDisabled: TRUE` - stops the overlay live but **keeps its settings**, so `enable` restores them. `--purge` deletes the entry and its settings instead. The module stays loaded either way (slapd refuses to unload one)                                                                                                                                                                                                 |
+| `config acl list <database-dn>`                                                                                                                           | show `olcAccess` rules on a database                                                                                                                                                                                                                                                                                                                                                                                           |
+| `config acl move <database-dn> <from> <to> [--force]`                                                                                                     | reorder an `olcAccess` rule (renumbers the rest, live) - fixes a specific rule shadowed by a broader one placed above it. **Refused** when the move would silently change access: it names the clauses that would stop applying, or the rule that would become unreachable; `--force` applies it anyway                                                                                                                        |
+| `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to _search_ a tree); `--filter` narrows the rule to matching entries (least privilege); new rules end in `by * break` (additive) and are **auto-placed above the rule that would shadow them** - `--at N` overrides, and a grant that still cannot fire is reported                                   |
+| `config acl delete <database-dn> <index> [--force]`                                                                                                       | delete one rule, by the exact value the server holds (the rest are untouched; the server renumbers). Removing a **dead** rule - one `lint` reports - changes nothing and is the point: `revoke` keeps a deliberate `by * none`, so a dead rule has no other way out. Deleting a **live** rule is **refused**, naming the clauses that would stop applying; `--force` overrides                                                 |
+| `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                                                                                               | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one - slapd rejects a clauseless rule, which used to fail the whole revoke - or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access                                                                                            |
+| `config acl lint <database-dn>`                                                                                                                           | report rules that can never fire - a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke                                                                                                                                                                                                                                       |
+| `config set <dn> <attr> [value…]` `[--add] [--force]`                                                                                                     | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`). `set` **replaces the whole attribute** - on a multi-valued one it drops every value you do not pass, so it is **refused** when that would lose values, naming them; `--add` appends, `--force` overrides                                                                                                                                                    |
+| `config limits get [--db]`                                                                                                                                | show `olcSizeLimit`/`olcTimeLimit`/`olcLimits`                                                                                                                                                                                                                                                                                                                                                                                 |
+| `config limits set [--db] [--size N\|unlimited] [--time N] [--for <selector>]`                                                                            | raise the search size cap. `--for` writes a per-identity `olcLimits`: an existing clause for that identity is **updated** (a second one would never be reached), the limits you do not pass are kept, and a new clause is **placed above** anything that would shadow it                                                                                                                                                       |
+| `config limits delete [--db] --for <selector>`                                                                                                            | remove every `olcLimits` clause for that identity (every one: an older CLI appended duplicates)                                                                                                                                                                                                                                                                                                                                |
+| `config limits lint [--db]`                                                                                                                               | report `olcLimits` clauses slapd can never reach - the ordering trap, same as `config acl lint`                                                                                                                                                                                                                                                                                                                                |
 
-### backup (logical LDIF over the wire — no docker/shell/volume needed)
+### backup (logical LDIF over the wire - no docker/shell/volume needed)
 
-| Command                                   | Notes                                                                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` so size never truncates. **Reads through the bind's ACLs** — a non-rootDN dump silently omits entries and attributes (`userPassword`) it may not read, so the command checks against the real entry count and warns; take backups as the **rootDN** |
-| `backup config <file>`                    | dump `cn=config` (config bind). Inspection / DR record — **not** restorable live over LDAP                                                             |
-| `backup restore <file> [--stop-on-error]` | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                                                                    |
+| Command                                   | Notes                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` so size never truncates. **Reads through the bind's ACLs** - a non-rootDN dump silently omits entries and attributes (`userPassword`) it may not read, so the command checks against the real entry count and warns; take backups as the **rootDN** |
+| `backup config <file>`                    | dump `cn=config` (config bind). Inspection / DR record - **not** restorable live over LDAP                                                                                                                                                                                                                                                                             |
+| `backup restore <file> [--stop-on-error]` | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                                                                                                                                                                                                                                                                                    |
 
 Restore strips server-managed attributes (`entryUUID`, `entryCSN`,
 `structuralObjectClass`, `memberOf`, ppolicy timers …) and sends the **Relax**
-control so a pre-hashed `userPassword` is accepted under a strict ppolicy — but
+control so a pre-hashed `userPassword` is accepted under a strict ppolicy - but
 Relax is only honored for the **rootDN**, so run restores with a rootDN profile.
 This is a logical backup; it **complements**, and does not replace, a
 filesystem / `slapcat` backup (operational/replication state and the config tree
@@ -312,7 +312,7 @@ are not restorable over the wire).
 
 ## Test environment
 
-A throwaway, self-contained OpenLDAP (Docker) so you can try the CLI in seconds —
+A throwaway, self-contained OpenLDAP (Docker) so you can try the CLI in seconds -
 real overlays (memberof, refint, ppolicy, accesslog) and a seeded tree:
 
 ```bash
@@ -328,262 +328,85 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 
 ## Gotchas worth knowing
 
-- **A password policy that does not resolve does not fall back — it turns policy
-  OFF.** `pwdPolicySubentry` (and `olcPPolicyDefault`) are plain DNs, and nothing
-  in LDAP enforces that they point at anything. When one dangles, slapd does
-  *not* apply the default: `ppolicy_get()` jumps to `defaultpol`, logs `no policy
-  will be applied!`, and uses the **empty** policy — no minimum length, no
-  lockout, no history, no expiry. The bind still succeeds, so a one-character
-  typo in a policy name is a silent security downgrade that nothing surfaces
-  until someone sets a three-character password and the server takes it. Note
-  that an entry which *exists but is not a `pwdPolicy`* lands on the same path
-  (the fetch filters on objectClass), so existence alone is not the test. The CLI
-  therefore resolves the policy before writing the reference, refuses to
-  `ppolicy delete` one that users are still assigned to (or that is the overlay
-  default) unless you pass `--force`, and ships **`ppolicy check`** to find
-  references already left dangling by an older tool or a hand edit.
-- **ppolicy lockout is real, and looks exactly like a typo.** Repeated bad binds
-  (`pwdMaxFailure`) lock the data admin, and slapd then answers the *correct*
-  password with `Invalid Credentials` — so the natural reaction, retrying, burns
-  another attempt. The CLI asks for the password-policy control on every bind: a
-  server that discloses lockout (ppolicy overlay with **`olcPPolicyUseLockout:
-  TRUE`**) gets a plain "the account is locked by the password policy" plus the
-  `user unlock` command. That flag is **FALSE by default** — deliberately, since
-  disclosing lockout confirms the account exists — and then nobody can tell the
-  two apart, so the error says so and points at `user info <login>` (run as an
-  admin, it reports `LOCKED`). Recover with a rootDN profile:
-  `user unlock <admin>`.
-- **`ppolicy set` / OUs under the base / `svc` ACLs require the rootDN** — your
-  `ou=users` admin has write only inside the subtrees the ACLs name. A refusal
-  (`Insufficient Access Rights`) names the rootDN to use: the CLI looks up
-  `olcRootDN` for your `base_dn` via the config bind and prints it, so you do not
-  have to go find it. Without a config bind it falls back to naming the rule.
-- **`--posix` needs the `nis` schema loaded server-side** — and says so. Without
-  it, `posixAccount` and its attributes do not exist, and slapd rejects the add
-  on whichever piece it checks first (`Undefined Attribute Type: homeDirectory`),
-  naming a symptom rather than the missing schema. `user add --posix` checks the
-  server's schema first and names `nis` instead. It can only report it: unlike an
-  overlay module, slapd cannot load a schema by name (it will not even delete one
-  at runtime), so load `schema/nis.ldif` server-side.
-- **`olcAccess` order matters — and the trap when reordering.** Rules are
-  evaluated by index and evaluation **stops at the first matching `to` target**,
-  so a specific rule below a broad one never fires (a classic cause of a
-  `noSuchObject`/code 32 where the base entry's `disclose` was denied). You do
-  not have to place rules yourself: `config acl grant` and `svc grant` insert a
-  new rule **above** the one that would shadow it, and report a grant that still
-  cannot fire. For rules written by other means, **`config acl lint` finds them**
-  and `config acl move` raises them.
-- **A rename keeps the entry where it is — including in a sub-OU.** `user`/`group`
-  resolve a name by subtree search, so the entry may live below the configured
-  OU (that is what `user move` is for). A rename is an in-place modrdn, so the
-  new DN is the old one's parent with a new RDN — it is never rebuilt from
-  `user_ou`/`group_ou`. Getting that wrong was not cosmetic: the modrdn went
-  through, the follow-up attribute refresh then aimed at a DN that did not exist,
-  and you were left with an entry renamed but still carrying the old login's
-  `uid`/`sn`/`mail`, behind an error naming a DN you never typed. If that refresh
-  does fail now, the message says the entry **is** renamed and what is stale on
-  it, rather than reading as though nothing happened.
-- **`users export | users import` is a round-trip now — it used not to be.** The
-  two carried unrelated CSV layouts that happened to be the same width: export
-  wrote `uid,cn,sn,givenName,displayName,mail`, import read column 1 as a
-  **group** and column 2 as a **mail**. So the obvious migration — export from
-  one server, import into the next — put `sn` where the mail goes, and because
-  `mail` is an IA5String with no format check, slapd accepted `mail: Titi` on
-  every user and the import reported success. Columns are now read **by name**
-  off the header row, in any order; a headerless file keeps the documented
-  positional `login[,group][,mail]`. A header is a first row whose **first** cell
-  names the login (`login`/`uid`/`user`/`username`) — that requirement is what
-  keeps a real data row from being eaten as one. `--with-hash` round-trips too:
-  the exported `userPassword` is a hash, import stores it as one, and the user
-  binds with the same password on the new server. What CSV cannot carry is group
-  membership — that lives on the group entries, not the users' — so `--ldif` is
-  the full copy.
-- **A deleted user stays in its groups — and re-creating the login walks it back
-  in.** A `groupOfNames` names its members by DN, and nothing in LDAP keeps those
-  DNs honest. Delete a user and every group still carries `member: cn=<gone>,…`;
-  rename one and the groups keep naming a DN it no longer has, so the user
-  silently loses everything the group granted. The nasty direction is re-use: add
-  the login back and it is a member again, of groups nobody meant to re-grant.
-  slapd **can** maintain those references, but only when configured, and there
-  are **two independent mechanisms** — `refint`'s `olcRefintAttribute: member`,
-  and `memberof`'s `olcMemberOfRefInt: TRUE`. Either one covers both delete and
-  rename; neither is on in a stock install; and an enabled `refint` with **no**
-  `olcRefintAttribute` maintains nothing at all — enabled, listed as `active`,
-  inert. The CLI checks both and repairs from here when neither answers, saying
-  so (`--no-fix-refs` skips it). A group whose *only* member was the deleted user
-  cannot be emptied — `groupOfNames` requires one — so it is reported as an error
-  rather than passed off as a clean delete. The better fix is server-side, where
-  it is atomic: `config overlay enable refint`.
-- **`ops who-can-write` answers from the rules alone — and says so when it
-  can't.** It evaluates `olcAccess` the way slapd documents it: rules in index
-  order, the first whose `to` matches decides, and identities it does not name
-  are denied *there* (slapd.access(5) terminates every rule with an implicit
-  `by * none stop`) rather than falling through. A rule ending in `by * break` —
-  what this CLI's own grants use — does hand the question on, and is followed.
-  Two things it cannot settle from the rules: a `filter=`, whose answer is in the
-  entry's own attributes, and a regex. It reports **CANNOT SAY** and names the
-  rule instead of guessing, because a confident wrong "nobody can write this" is
-  the kind of answer that ends up in a security review. For those, `slapacl -F
-  /etc/openldap/slapd.d -D <identity> -b <dn> <attr>/write` decides on the server.
-  Note the rootDN never appears in any rule — it bypasses access control
-  entirely, so it is reported separately, and always.
-- **`olcLimits` is that same trap, in a second attribute.** It is ordered too,
-  and slapd "examines each clause in turn until it finds one that matches" — so a
-  `*` clause above a per-identity one silently swallows it. It is quieter than
-  the ACL version: an identity matching no clause falls back to the database's
-  global `olcSizeLimit` rather than being denied, so the app keeps working, just
-  at the wrong ceiling. `config limits set --for` therefore **updates** an
-  existing clause instead of appending a second one that could never be reached
-  (which is what re-running it used to do), keeps the limits you did not pass,
-  and places a new clause **above** whatever would shadow it. `config limits
-  lint` finds clauses already stranded, and `config limits delete --for` removes
-  them — every duplicate for that identity, not just the first.
-- **Names with `,` `+` `\` `"` `;` `<` `>` are fine.** A DN is assembled from
-  text, so such a character in a name would otherwise become DN *syntax* — the
-  entry lands elsewhere, or slapd rejects the lot with a bare `Invalid DN
-  Syntax` that names nothing. Every RDN the CLI builds is escaped per RFC 4514,
-  so `group create 'acme,inc'` creates `cn=acme\,inc,…` with `cn: acme,inc`
-  intact, and `info`/`rename`/`delete` still resolve it. Ordinary names are
-  untouched. (LDAP *filters* were already escaped.)
-- **The typed commands only manage `groupOfNames` and `inetOrgPerson` — and say
-  so.** That is deliberate: `group add-member` writes `member`, which a
-  `groupOfUniqueNames` (`uniqueMember`) or a `posixGroup` (`memberUid`) would
-  reject. But an entry of another type is **not** missing, so `group`/`user`
-  commands no longer answer `not found` for it: they name its DN and its real
-  objectClass, and point at `entry`/`search`. Likewise `groups list` /
-  `users list` report how many entries under the base their filter left out —
-  in the result (`skippedNotGroupOfNames` in `-o json`), so a count is never
-  read as "this is everything".
-- **`set` replaces, it does not add — and the CLI stops you at the cliff.**
-  On a single-valued attribute that is the point. On a multi-valued one
-  (`olcAccess`, `olcLimits`, `olcModuleLoad`, `member`) naming one value deletes
-  the rest: one `config set <db> olcAccess '<rule>'` is every ACL on the
-  database, gone, with a success message. So `config set`, `entry set`,
-  `user/group/ou set` read the attribute first and **refuse** a replace that
-  would drop values, listing them. Passing every value back is a faithful
-  rewrite and goes through; `--add` appends; `--force` deletes on purpose. For
-  ACLs prefer `config acl grant`/`revoke`/`delete`, which edit one rule.
-  **Multi-valued is the schema's word, not the entry's**: an attribute holding
-  one value is not single-valued, and that is the case that bites — a group with
-  one `member`, a database with one `olcAccess` rule, a stock mdb's `olcDbIndex`.
-  The guard reads `SINGLE-VALUE` out of the subschema rather than counting what
-  is there, so replacing that lone value is refused like any other loss. (`set
-  <attr>` with *no* value is still the delete verb and clears it without fuss.)
-- **A dead rule needs `config acl delete`, not `revoke`.** `config acl revoke`
-  strips a grantee's clauses and drops the rules that empty out — but it keeps a
-  rule left as `by * none`, because an explicit deny is not leftover noise. So a
-  rule that `lint` reports as dead (unreachable, granting nothing) survives every
-  revoke. `config acl delete <db> <index>` removes it by the **exact value the
-  server holds**, leaving the other rules untouched — deleting renumbers
-  everything below, so a delete by index alone would race with that. It refuses
-  to remove a **live** rule (whose entries would fall to whatever sits below),
-  naming the clauses that would stop applying; `--force` overrides.
-- **Reordering decides who answers — `config acl move` refuses to do that
-  silently.** Raising a rule that does not end in `by * break` above a broader one
-  takes the broader rule's grantees off the entries it covers (rootDN excepted):
-  they lose the access with no error, seeing `noSuchObject`. **`lint` cannot catch
-  this** — nothing became unreachable, the broader rule still answers everywhere
-  else. So the move is checked first and refused, naming the exact clauses that
-  would stop applying (a downgrade, e.g. `write` → `read`, counts). Give the rule
-  a `by * break` first (`config set`) and the same move is allowed and additive;
-  `--force` applies it as-is. Moving a rule *under* a broader one is refused the
-  same way, since it would become unreachable.
-- **Several accounts, same tree → one rule (or a group), not two rules.**
-  Evaluation stops at the first rule whose `to` matches, so a **second rule with
-  the same `to`** is dead — the first grantee works, the rest silently don't.
-  Grant all of them in the **same** rule instead: `config acl grant` inserts a
-  `by <who>` clause into the existing rule (multiple `by` clauses coexist, one
-  per identity). For many/rotating accounts, grant a **group** once
-  (`--group readers`) and manage membership — no ACL edits per account.
-- **A rename carries its ACLs with it — the CLI repairs them for you.** slapd
-  rewrites nothing in `olcAccess`: on its own, after `group rename devs
-  engineers`, a rule granting `group.exact="cn=devs,…"` would still name a DN
-  that no longer exists, stop matching, and drop every member's access **with no
-  error anywhere** (the client sees `noSuchObject`, not "denied"). So every
-  command that changes a DN — `user rename`, `user move`, `group rename`,
-  `ou rename`, `entry rename` — re-points the rules naming the old DN at the new
-  one, including the `filter=(memberOf=…)` of a `svc grant --members-of` and the
-  rules naming entries *below* a renamed container. `memberOf` needs nothing: the
-  memberof overlay maintains it. This needs the **config bind**; without it the
-  rename still happens and says loudly that the ACLs were not checked.
-  `--no-fix-acl` opts out. Two rule forms cannot be rewritten mechanically and
-  are reported for review instead: `dn.regex=` (a literal substitution can change
-  what a pattern matches) and `set=`.
-- **Generated passwords adapt to the policy.** `user passwd` / `user add` /
-  `users passwd` size the generated password to the effective `pwdMinLength`
-  (resolved from the user's `pwdPolicySubentry`, the overlay `olcPPolicyDefault`
-  via the config bind, or a sole policy) and retry stronger on a constraint
-  violation. If a custom complexity module still rejects it after a few tries,
-  the error says so — pass `--password` explicitly.
-- **`user export --with-hash`** prints password hashes — sensitive output.
-- **Resizing `olcDbMaxSize` can disrupt slapd.** `config db resize` (and
-  `config set olcDbMaxSize`) remap the LMDB env. On a live, busy server this
-  races with active transactions and can briefly interrupt — sometimes restart —
-  slapd (observed intermittently, any database, under concurrent load). The new
-  size is persisted to `cn=config` and applied regardless, and the command warns
-  first. Prefer a quiet maintenance window.
-- **`ops replication` reports from one server — it cannot see drift by itself.**
-  A `contextCSN` is one value per contributing server-ID, and the timestamp is
-  how far that SID's changes have propagated *here*. To know a replica is behind,
-  you compare the same SID's time on the replica against the provider — which
-  needs the command run on each node. From one connection it reports what it can
-  prove: the role (standalone / replica / provider / mirror), decoded per SID
-  with each one's age, and the one failure a single server *does* reveal — a node
-  configured as a replica (`olcSyncrepl`) that carries no `contextCSN` has never
-  completed an initial sync. It no longer hardcodes "standalone"; that verdict
-  now follows from the config actually being empty. (And `ops monitor` says the
-  monitor backend is absent, rather than printing blank counters, when
-  `cn=Monitor` does not resolve.)
-- **`backup data` reads through the bind's ACLs — take it as the rootDN.** The
-  dump is an ordinary LDAP search, so slapd applies the bind's access controls to
-  it: entries the identity cannot see are absent, and attributes it cannot read —
-  `userPassword` before anything — are dropped from the entries that remain. The
-  count then reads as a whole backup when it is a filtered subset, and restoring
-  it recreates accounts that cannot authenticate, missing whatever entries were
-  invisible. Only the rootDN bypasses access control, so only its dump is
-  complete by construction. The command checks which case yours is — it reads the
-  database's true entry count from the monitor (`olmMDBEntries`) and, when the
-  bind is not the rootDN, warns and quantifies the entries missing. A rootDN dump
-  is silent. **If the warning names missing entries or a non-rootDN bind, that
-  file is not a backup you can restore from.**
-- **`backup restore` needs the rootDN:** the Relax control (re-adding a
-  `userPassword` under a strict ppolicy) is only honored for the rootDN. As a
-  data admin, password-bearing entries fail the policy check. `backup` is a
-  logical dump — for config-tree / replication-state recovery, keep a
-  `slapcat`/filesystem backup.
-- **Listing >500 entries is handled for you.** OpenLDAP's `olcSizeLimit`
-  (default 500) caps results per bound identity, and RFC 2696 paging does **not**
-  bypass it. So `users list` / `users export` / `groups list` / `backup data` (and
-  the `--group` / `--filter` selectors) page automatically and, if the server
-  caps the result, **temporarily lift the limit via the config bind** (a scoped
-  `olcLimits` override on the data database), return everything, then restore
-  `olcLimits` — logging a warning when they do. This needs a working
-  `config_bind_dn` / `config_bind_pw`; without one (or with bad config
-  credentials) you get a clear error telling you to set the config bind or bind
-  as the rootDN — never a silent truncation. (Bulk `users import` has no such limit.)
-  Prefer a permanent fix? `config limits set --for 'dn.exact=<admin-dn>' --size unlimited --db 'olcDatabase={1}mdb,cn=config'`.
+**Passwords & policy**
+
+- **A `pwdPolicySubentry`/`olcPPolicyDefault` that does not resolve turns policy
+  OFF, not back to the default** — so the CLI resolves a policy before assigning,
+  `ppolicy delete` refuses one still in use, and `ppolicy check` finds danglers.
+- **A ppolicy lockout reads as a wrong password** (`Invalid Credentials`); with
+  `olcPPolicyUseLockout: TRUE` the CLI says so, else `user info` (as admin) shows
+  `LOCKED`. Fix: `--profile <root> user unlock <login>`.
+- **`ppolicy set`, OUs under the base, and `svc` ACLs need the rootDN** — the
+  `Insufficient Access Rights` refusal names it.
+- **Generated passwords match the effective `pwdMinLength`** and retry stronger;
+  pass `--password` if a custom module still refuses. `--with-hash` prints hashes.
+- **`--posix` needs the `nis` schema loaded server-side** — the CLI names it
+  instead of failing on a cryptic `Undefined Attribute Type`.
+
+**ACLs (`olcAccess`, ordered)**
+
+- **First matching `to` rule wins**, so a specific rule under a broad one is dead
+  (seen as `noSuchObject`); `grant`/`svc grant` auto-place **above** shadowers,
+  `lint` finds the rest, `move` raises them.
+- **Several accounts on one tree → one rule (or a `--group`), not two** — a
+  second rule with the same `to` never fires; `grant` adds a `by` clause instead.
+- **`move`/`delete` refuse to change access silently** (naming the clauses that
+  would drop; `--force` overrides); a **dead** rule needs `delete`, not `revoke`.
+- **Every DN-changing command re-points the ACLs naming the old DN** — needs the
+  config bind (`--no-fix-acl` opts out; `regex=`/`set=` rules reported for review).
+
+**Data integrity**
+
+- **`set` replaces the whole attribute** — it refuses to drop values of a
+  multi-valued one (by the schema's `SINGLE-VALUE`, not the value count);
+  `--add` appends, `--force` forces, no value deletes.
+- **A rename keeps the entry in place**, sub-OUs included — the new DN is the old
+  parent + a new RDN, never rebuilt from `user_ou`/`group_ou`.
+- **Group `member` DNs self-heal only with `refint` or `memberof`** (neither on
+  by default); otherwise the CLI repairs delete/rename from here (`--no-fix-refs`
+  skips). Best fixed server-side: `config overlay enable refint`.
+- **Names with `,` `+` `\` `"` `;` `<` `>` are fine** — every RDN is RFC 4514-escaped.
+- **Typed commands only manage `groupOfNames`/`inetOrgPerson`** — another type is
+  named with its real objectClass, and `list` reports what its filter skipped.
+
+**Scale, backup, diagnostics**
+
+- **Reads over `olcSizeLimit` (default 500) page and lift the limit** via the
+  config bind — never a silent truncation. `olcLimits` is the same ordered trap:
+  `config limits set --for` updates in place, `lint`/`delete --for` clean up.
+- **`backup data` reads through the bind's ACLs — take it as the rootDN**, or
+  entries and `userPassword` are silently dropped. The CLI checks the real entry
+  count (`olmMDBEntries`) and warns; a warning means the file is not restorable.
+- **`backup restore` needs the rootDN** (Relax control). It is a logical dump —
+  keep a `slapcat` backup for config/replication state.
+- **`ops who-can-write` evaluates ACLs like slapd but from the rules alone** — a
+  `filter=`/regex gets **CANNOT SAY** and a `slapacl` pointer, not a guess.
+- **`ops replication` reports a role and per-SID CSN from one server** —
+  cross-node drift needs running it on each. `ops monitor` names an absent backend.
+- **Resizing `olcDbMaxSize` can briefly disrupt slapd** (LMDB remap) — the CLI
+  warns; use a maintenance window.
 
 ## Layout
 
 ```
 cmd/openldap-cli/   main entrypoint (package main)
 internal/
-  cli/      cobra commands (user, users, group, ..., ops, config, schema)
-  config/   profile loading (yaml + env)
-  ldapx/    thin go-ldap/v3 wrapper (connect, search, modify, modrdn, ...)
-  domain/   YOUR conventions — naming + schema (edit here)
-  acl/      olcAccess surgery + evaluation (unit-tested)
-  limits/   olcLimits surgery        (unit-tested)
-  ldif/     LDIF read/write          (unit-tested)
-  usercsv/  user CSV column mapping  (unit-tested)
-  dn/       RFC 4514 DN escaping     (unit-tested)
-  pwd/      password generation      (unit-tested)
-  schema/   schema NAME / SINGLE-VALUE parser (unit-tested)
-  overlay/  overlay catalog + defaults (unit-tested)
-  humanize/ byte sizes               (unit-tested)
-  ldaptime/ generalizedTime          (unit-tested)
+  cli/      cobra commands                     (user, users, group, ..., ops, config, schema)
+  config/   profile loading                    (yaml + env)
+  ldapx/    thin go-ldap/v3 wrapper            (connect, search, modify, modrdn, ...)
+  domain/   YOUR conventions - naming + schema (edit here)
+  acl/      olcAccess surgery + evaluation     (unit-tested)
+  limits/   olcLimits surgery                  (unit-tested)
+  ldif/     LDIF read/write                    (unit-tested)
+  usercsv/  user CSV column mapping            (unit-tested)
+  dn/       RFC 4514 DN escaping               (unit-tested)
+  pwd/      password generation                (unit-tested)
+  schema/   schema NAME / SINGLE-VALUE parser  (unit-tested)
+  overlay/  overlay catalog + defaults         (unit-tested)
+  humanize/ byte sizes                         (unit-tested)
+  ldaptime/ generalizedTime                    (unit-tested)
   output/   text/json/yaml rendering
-tests/      faithful test OpenLDAP (compose + bootstrap)
+tests/      faithful test OpenLDAP             (compose + bootstrap)
 ```
 
 ## Examples
@@ -594,7 +417,7 @@ tests/      faithful test OpenLDAP (compose + bootstrap)
 ### Users
 
 ```bash
-# create — strong password generated and printed once
+# create - strong password generated and printed once
 openldap-cli user add toto.titi
 openldap-cli user add demo1 --no-password                 # plain login, no password
 openldap-cli user add jane.doe --posix --set title=SRE --set 'telephoneNumber=+33...'
@@ -622,7 +445,7 @@ openldap-cli group info devs
 openldap-cli groups list
 openldap-cli group remove-member devs demo1
 openldap-cli group set devs description 'Core team'
-openldap-cli group set devs description                    # no value = delete it
+openldap-cli group set devs description                   # no value = delete it
 openldap-cli group rename devs engineers                  # warns about ACLs naming cn=devs
 openldap-cli group delete engineers
 
@@ -658,8 +481,8 @@ openldap-cli users delete --filter '(title=Intern)' --yes
 openldap-cli users export > users.csv
 openldap-cli users export --ldif > users.ldif
 openldap-cli import-ldif users.ldif
-openldap-cli groups delete old.team another.team          # bulk delete groups by name
-openldap-cli svcs delete legacy.agent old.agent           # deletes + cleans up each one's ACL clauses
+openldap-cli groups delete old.team another.team              # bulk delete groups by name
+openldap-cli svcs delete legacy.agent old.agent               # deletes + cleans up each one's ACL clauses
 ```
 
 ### Service accounts (entry + cn=config ACL)
@@ -674,9 +497,9 @@ openldap-cli svc delete backup-agent                         # also strips its A
 
 ### Give an app access to a tree (the common recipe)
 
-An app working on a tree needs **two** rules: one on the container — so the tree
+An app working on a tree needs **two** rules: one on the container - so the tree
 can be used as a search base; without it a search fails with `noSuchObject` even
-when the entries are readable — and one on the entries. `svc grant` emits both,
+when the entries are readable - and one on the entries. `svc grant` emits both,
 places each above whatever would shadow it, and ends them with `by * break` so no
 other identity is affected:
 
@@ -697,7 +520,7 @@ openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'   # prove nothing is
 ```
 
 The container access follows `--access`: `search` for a read grant, **`write` for
-`--access write`** — creating or deleting a child needs write on the *parent*
+`--access write`** - creating or deleting a child needs write on the _parent_
 (slapd says `no write access to parent` otherwise).
 
 `--members-of` fits read and modify; a brand-new entry cannot match a `memberOf`
@@ -723,14 +546,19 @@ openldap-cli --profile prod-root ppolicy delete strict       # refused while any
 
 ```bash
 openldap-cli config db list
-openldap-cli config overlay list                          # each one: active | DISABLED
-# turn an overlay on (loads memberof.so if it isn't loaded yet) — memberof is
+openldap-cli config overlay list                                  # each one: active | DISABLED
+# turn an overlay on (loads memberof.so if it isn't loaded yet) - memberof is
 # what makes `svc grant --members-of` and the memberOf attribute work:
 openldap-cli --profile prod-root config overlay enable memberof
+# refint keeps group `member` DNs honest on delete/rename (created configured):
+openldap-cli --profile prod-root config overlay enable refint
 openldap-cli --profile prod-root config overlay disable ppolicy   # off, settings kept
 openldap-cli --profile prod-root config overlay enable ppolicy    # back on, as it was
 openldap-cli config acl list 'olcDatabase={1}mdb,cn=config'
+openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'   # rules that can never fire
 openldap-cli --profile prod-root config acl move 'olcDatabase={1}mdb,cn=config' 8 5   # raise a shadowed rule
+openldap-cli --profile prod-root config acl delete 'olcDatabase={1}mdb,cn=config' 6   # drop a dead rule (by index)
+openldap-cli --profile prod-root config acl revoke 'olcDatabase={1}mdb,cn=config' --group readers
 # several service accounts, same rights on a tree -> one group grant:
 openldap-cli group create readers --member svc.a
 openldap-cli group add-member readers svc.b
@@ -739,7 +567,7 @@ openldap-cli --profile prod-root config acl grant 'olcDatabase={1}mdb,cn=config'
 openldap-cli --profile prod-root config db resize 'olcDatabase={2}mdb,cn=config' 4GiB # olcDbMaxSize
 openldap-cli --profile prod-root config limits set --size 5000                        # raise the search cap
 
-# per-identity limits: ordered, first match wins — `lint` finds the ones never reached
+# per-identity limits: ordered, first match wins - `lint` finds the ones never reached
 openldap-cli config limits set --db 'olcDatabase={1}mdb,cn=config' \
   --for 'dn.exact=cn=app,dc=example,dc=org' --size unlimited
 openldap-cli config limits lint --db 'olcDatabase={1}mdb,cn=config'
@@ -770,7 +598,7 @@ openldap-cli entry get 'cn=module{0},cn=config' olcModuleLoad --config-bind
 
 ```bash
 openldap-cli whoami                                         # who am I bound as?
-openldap-cli ops db-stats                                   # per-DB used/max size (human) — catch MAP_FULL
+openldap-cli ops db-stats                                   # per-DB used/max size (human) - catch MAP_FULL
 openldap-cli ops monitor                                    # connections / ops / threads
 openldap-cli ops audit-binds --since 24h --user toto.titi
 openldap-cli ops who-can-write 'cn=toto.titi,ou=users,dc=example,dc=org'
@@ -785,21 +613,21 @@ openldap-cli ops replication                                # role + decoded con
 # for a real HA drift check, run it on each node and compare a SID's timestamp
 ```
 
-### Backup & restore (no docker/alpine — just the CLI)
+### Backup & restore (no docker/alpine - just the CLI)
 
 ```bash
 # Dump the data tree to a gzipped LDIF. Bind as the rootDN, or the dump is
-# ACL-filtered (missing entries + userPassword) — the command warns if it is.
+# ACL-filtered (missing entries + userPassword) - the command warns if it is.
 openldap-cli --profile prod-root backup data "backup_data_$(date +%Y%m%d).ldif.gz"
 
 # Full-fidelity dump incl. operational attributes (inspection, not restorable)
 openldap-cli backup data --operational full_dump.ldif.gz
 
-# Config tree dump — inspection / DR record only (config bind)
+# Config tree dump - inspection / DR record only (config bind)
 openldap-cli --profile prod-root backup config backup_config.ldif.gz
 
-# Restore — bind as the rootDN so the Relax control is honored
+# Restore - bind as the rootDN so the Relax control is honored
 openldap-cli --profile prod-root backup restore backup_data_20260630.ldif.gz
 ```
 
-> Dumps contain password hashes — store them on an encrypted partition.
+> Dumps contain password hashes - store them on an encrypted partition.
