@@ -17,6 +17,9 @@ import (
 type Client struct {
 	conn *ldap.Conn
 	cfg  *config.Profile
+	// singleValued memoizes the subschema's SINGLE-VALUE flags (see
+	// IsSingleValued); nil until the first lookup pays for the read.
+	singleValued map[string]bool
 }
 
 // Connect dials, optionally StartTLS-upgrades, and binds.

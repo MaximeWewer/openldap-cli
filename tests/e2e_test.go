@@ -213,6 +213,23 @@ func TestCLI(t *testing.T) {
 		} else if !strings.Contains(se, "would delete 1 of them") {
 			t.Errorf("member refusal unclear:\n%s", se)
 		}
+
+		// Multi-valued is the SCHEMA's word, not the entry's: an attribute
+		// holding ONE value is not single-valued, and counting values waved
+		// through the replace that deleted the only one there was.
+		run(t, admin, adPW, "group", "remove-member", "e2e.rg", "user2.name")
+		if _, se, err = try(admin, adPW, "group", "set", "e2e.rg", "member",
+			"cn=user2.name,ou=users,dc=example,dc=org"); err == nil {
+			t.Error("group set member on a one-member group: replaced it instead of refusing")
+		} else if !strings.Contains(se, "the schema says it is multi-valued") {
+			t.Errorf("one-value refusal does not explain itself:\n%s", se)
+		}
+		has(t, run(t, admin, adPW, "group", "info", "e2e.rg"), "cn=user1.name")
+
+		// ...but `set <attr>` with no values is the delete verb, and clearing the
+		// one value you can see is not a surprise — it must still work
+		run(t, admin, adPW, "group", "set", "e2e.rg", "description", "temporary")
+		run(t, admin, adPW, "group", "set", "e2e.rg", "description")
 		// --force is the way through
 		run(t, admin, adPW, "group", "set", "e2e.rg", "member",
 			"cn=user1.name,ou=users,dc=example,dc=org", "--force")

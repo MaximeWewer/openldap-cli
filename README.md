@@ -384,6 +384,12 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   would drop values, listing them. Passing every value back is a faithful
   rewrite and goes through; `--add` appends; `--force` deletes on purpose. For
   ACLs prefer `config acl grant`/`revoke`/`delete`, which edit one rule.
+  **Multi-valued is the schema's word, not the entry's**: an attribute holding
+  one value is not single-valued, and that is the case that bites — a group with
+  one `member`, a database with one `olcAccess` rule, a stock mdb's `olcDbIndex`.
+  The guard reads `SINGLE-VALUE` out of the subschema rather than counting what
+  is there, so replacing that lone value is refused like any other loss. (`set
+  <attr>` with *no* value is still the delete verb and clears it without fuss.)
 - **A dead rule needs `config acl delete`, not `revoke`.** `config acl revoke`
   strips a grantee's clauses and drops the rules that empty out — but it keeps a
   rule left as `by * none`, because an explicit deny is not leftover noise. So a
