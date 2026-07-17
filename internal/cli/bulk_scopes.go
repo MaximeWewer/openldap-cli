@@ -352,8 +352,12 @@ var svcsCmd = &cobra.Command{Use: "svcs", Short: "Bulk actions on service accoun
 var svcsDeleteCmd = &cobra.Command{
 	Use:     "delete <name...>",
 	Aliases: []string{"del", "rm"},
-	Short:   "Delete many service accounts (entry only; ACL cleanup via singular svc delete)",
-	Args:    cobra.MinimumNArgs(1),
+	Short:   "Delete many service accounts, cleaning up their ACL clauses and memberships",
+	Long: "Deletes each account and removes the references it leaves behind — the\n" +
+		"`svc grant` olcAccess clauses and any group memberships — exactly as the\n" +
+		"singular `svc delete` does. Leaving them would let a new account created\n" +
+		"with a reused name inherit the old one's access.",
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := connect()
 		if err != nil {
@@ -365,6 +369,12 @@ var svcsDeleteCmd = &cobra.Command{
 			dn := svcDN(cli, strings.TrimSpace(name))
 			if derr := cli.Delete(dn); derr != nil {
 				res.Failed = append(res.Failed, importIssue{dn, derr.Error()})
+				continue
+			}
+			// same cleanup as the singular delete: a bulk that skipped it was a
+			// dead-ACL factory
+			if _, cerr := cleanupServiceAccount(cli, dn); cerr != nil {
+				res.Failed = append(res.Failed, importIssue{dn, "deleted, but cleanup left a problem: " + cerr.Error()})
 				continue
 			}
 			res.OK = append(res.OK, dn)

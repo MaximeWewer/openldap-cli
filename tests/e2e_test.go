@@ -532,6 +532,18 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "svc", "revoke", "e2e.svc"), "everywhere")
 		has(t, run(t, admin, adPW, "svc", "delete", "e2e.svc"), "removed 0 ACL clause")
 		has(t, run(t, admin, adPW, "config", "acl", "lint", "olcDatabase={1}mdb,cn=config"), "no dead or empty rules")
+
+		// the BULK delete must clean up too: a svcs delete that left the grant
+		// behind was a dead-ACL factory, and re-creating the name inherited it
+		db := "olcDatabase={1}mdb,cn=config"
+		run(t, admin, adPW, "svc", "add", "e2e.svc2", "--subtree", "ou=users,dc=example,dc=org", "--access", "write")
+		defer try(admin, adPW, "svc", "delete", "e2e.svc2")
+		has(t, run(t, admin, adPW, "config", "acl", "list", db), `cn=e2e.svc2,ou=service-accounts`)
+		run(t, admin, adPW, "svcs", "delete", "e2e.svc2")
+		if got := run(t, admin, adPW, "config", "acl", "list", db); strings.Contains(got, "cn=e2e.svc2,ou=service-accounts") {
+			t.Errorf("svcs delete left the account's ACL clauses behind:\n%s", got)
+		}
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "no dead or empty rules")
 	})
 
 	t.Run("ou", func(t *testing.T) {

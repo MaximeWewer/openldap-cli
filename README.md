@@ -200,7 +200,7 @@ Plural commands act on many targets at once (the singular forms act on one).
 | `users import <csv> [--stop-on-error]`                            | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order — what `export` writes. Headerless files stay positional: `login[,group][,mail]` |
 | `users export [--group] [--with-hash] [--ldif]`                   | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). Group memberships are not in the CSV — they live on the group entries; `--ldif` writes full entries instead |
 | `groups list [--members]` / `svcs list`                           | listings                                                                                         |
-| `groups delete <name…>` / `svcs delete <name…>`                   | bulk delete by name                                                                              |
+| `groups delete <name…>` / `svcs delete <name…>`                   | bulk delete by name. `svcs delete` cleans up each account's `svc grant` ACL clauses and memberships, like the singular `svc delete`                 |
 
 Selectors (`--group`/`--filter`/`--all-locked`) require **`--yes`** (they print
 the match count and refuse otherwise); explicit logins don't. `--stop-on-error`
@@ -650,7 +650,7 @@ openldap-cli users export > users.csv
 openldap-cli users export --ldif > users.ldif
 openldap-cli import-ldif users.ldif
 openldap-cli groups delete old.team another.team          # bulk delete groups by name
-openldap-cli svcs delete legacy.agent                     # entry only (ACL cleanup: singular `svc delete`)
+openldap-cli svcs delete legacy.agent old.agent           # deletes + cleans up each one's ACL clauses
 ```
 
 ### Service accounts (entry + cn=config ACL)

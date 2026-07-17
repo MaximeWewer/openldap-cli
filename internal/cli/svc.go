@@ -345,43 +345,56 @@ var svcDeleteCmd = &cobra.Command{
 		log.Debug().Str("dn", dn).Msg("service account deleted")
 
 		res := svcResult{Action: "deleted", DN: dn}
-		// notes accumulate: the membership repair and the ACL cleanup are two
-		// separate pieces of news, and the second must not swallow the first
-		var notes []string
-
-		// a service account can be a group member too, and the same dangling
-		// reference re-grants that access to the next account with this name
-		fixes, ferr := fixMemberRefsIfNeeded(cli, dn, "")
-		if ferr != nil {
-			return ferr
-		}
-		detail, derr := refFixDetail(fixes)
-		if derr != nil {
-			return derr
-		}
-		if detail != "" {
-			notes = append(notes, detail)
-		}
-
-		cc, err := connectConfig()
+		notes, err := cleanupServiceAccount(cli, dn)
+		res.Note = strings.Join(notes, "\n  ")
 		if err != nil {
-			res.Note = strings.Join(append(notes, "entry deleted, but ACL cleanup skipped: "+err.Error()), "\n  ")
-			return out.Emit(res)
+			return err
 		}
-		defer cc.Close()
-
-		removed, dropped, err := cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(dn))
-		if err != nil {
-			return fmt.Errorf("entry deleted, but ACL cleanup failed: %w", err)
-		}
-		log.Debug().Int("clauses", removed).Int("dropped", dropped).Msg("acl cleaned")
-		n := fmt.Sprintf("removed %d ACL clause(s)", removed)
-		if dropped > 0 {
-			n += fmt.Sprintf(", dropped %d now-empty rule(s)", dropped)
-		}
-		res.Note = strings.Join(append(notes, n), "\n  ")
 		return out.Emit(res)
 	},
+}
+
+// cleanupServiceAccount removes the references a deleted service account leaves
+// behind, so the next account created with the same name does not inherit them:
+// its group memberships, and the olcAccess clauses `svc grant` gave it.
+//
+// The two are the whole reason a service account is not just any entry — leaving
+// them turns a name reuse into a silent privilege grant. It returns human notes
+// (what was cleaned, or why it could not be) and an error only for a repair that
+// left a broken state; a missing config bind is reported as a note, not a
+// failure, since the entry itself is already gone.
+func cleanupServiceAccount(cli *ldapx.Client, dn string) (notes []string, err error) {
+	// a service account can be a group member too, and that dangling reference
+	// re-grants the group's access to the next account with this name
+	fixes, ferr := fixMemberRefsIfNeeded(cli, dn, "")
+	if ferr != nil {
+		return notes, ferr
+	}
+	if detail, derr := refFixDetail(fixes); derr != nil {
+		return notes, derr
+	} else if detail != "" {
+		notes = append(notes, detail)
+	}
+
+	cc, cerr := connectConfig()
+	if cerr != nil {
+		// the ACL clauses out-live the entry, so this is not merely cosmetic —
+		// say it was skipped rather than imply a clean delete
+		return append(notes, "entry deleted, but ACL cleanup skipped (no config bind): "+cerr.Error()+
+			"\n  its `svc grant` clauses remain and would apply to a new account of this name"), nil
+	}
+	defer cc.Close()
+
+	removed, dropped, aerr := cc.RemoveAccessGrantee(svcACLDB, acl.DNWho(dn))
+	if aerr != nil {
+		return notes, fmt.Errorf("entry deleted, but ACL cleanup failed: %w", aerr)
+	}
+	log.Debug().Int("clauses", removed).Int("dropped", dropped).Msg("acl cleaned")
+	n := fmt.Sprintf("removed %d ACL clause(s)", removed)
+	if dropped > 0 {
+		n += fmt.Sprintf(", dropped %d now-empty rule(s)", dropped)
+	}
+	return append(notes, n), nil
 }
 
 // ---- result -------------------------------------------------------------
