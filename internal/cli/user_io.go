@@ -14,6 +14,7 @@ import (
 	"github.com/MaximeWewer/openldap-cli/internal/domain"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 	"github.com/MaximeWewer/openldap-cli/internal/ldif"
+	"github.com/MaximeWewer/openldap-cli/internal/usercsv"
 )
 
 // ---- import -------------------------------------------------------------
@@ -23,9 +24,14 @@ var userImportStopOnError bool
 var userImportCmd = &cobra.Command{
 	Use:   "import <csv-file>",
 	Short: "Bulk-create users from CSV",
-	Long: "CSV rows: firstname.lastname[,group][,mail-override]\n" +
-		"Blank lines and lines starting with # are skipped, as is a header row\n" +
-		"whose first field is login/uid/firstname.lastname.",
+	Long: "With a header row, columns are read BY NAME — any of:\n" +
+		"  login|uid, group, mail, cn, sn, givenName, displayName, userPassword\n" +
+		"in any order, and the ones you leave out are derived from the login. This is\n" +
+		"what `users export` writes, so an export imports back as itself.\n\n" +
+		"Without a header, the columns are positional: login[,group][,mail].\n" +
+		"A header is a first row whose first cell is login/uid/user/username.\n\n" +
+		"Blank lines and lines starting with # are skipped. An exported\n" +
+		"userPassword is a hash and is stored as one.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -50,6 +56,8 @@ var userImportCmd = &cobra.Command{
 		defer cli.Close()
 
 		var res importResult
+		cols := usercsv.Positional
+		first := true
 		for {
 			row, err := r.Read()
 			if errors.Is(err, io.EOF) {
@@ -61,18 +69,18 @@ var userImportCmd = &cobra.Command{
 			if len(row) == 0 || strings.TrimSpace(row[0]) == "" {
 				continue
 			}
-			login := strings.ToLower(strings.TrimSpace(row[0]))
-			if isHeader(login) {
-				continue
-			}
-			group, mailOverride := "", ""
-			if len(row) > 1 {
-				group = strings.TrimSpace(row[1])
-			}
-			if len(row) > 2 {
-				mailOverride = strings.TrimSpace(row[2])
+			// A header names its columns, so honor them rather than assume an
+			// order: `users export` writes uid,cn,sn,givenName,displayName,mail,
+			// and reading that positionally put sn where mail goes.
+			if first {
+				first = false
+				if h := usercsv.Header(row); h != nil {
+					cols = h
+					continue
+				}
 			}
 
+			login := strings.ToLower(usercsv.Cell(row, cols, usercsv.Login))
 			u, err := domain.ParseUser(login, cfg.MailDomain)
 			if err != nil {
 				res.Failed = append(res.Failed, importIssue{login, err.Error()})
@@ -81,11 +89,25 @@ var userImportCmd = &cobra.Command{
 				}
 				continue
 			}
-			if mailOverride != "" {
-				u.Mail = mailOverride
+			// Derived values are defaults; a column that carries the real one wins.
+			// Without this an export round-trip quietly re-derives `sn` from the
+			// login and drops whatever the directory actually held.
+			for field, set := range map[string]func(string){
+				usercsv.CN:          func(v string) { u.CN = v },
+				usercsv.SN:          func(v string) { u.SN = v },
+				usercsv.GivenName:   func(v string) { u.GivenName = v },
+				usercsv.DisplayName: func(v string) { u.DisplayName = v },
+				usercsv.Mail:        func(v string) { u.Mail = v },
+			} {
+				if v := usercsv.Cell(row, cols, field); v != "" {
+					set(v)
+				}
 			}
+
 			dn := u.DN(cfg.UserOU, cfg.BaseDN)
-			if err := cli.AddEntry(dn, u.AttributeMap("", nil)); err != nil {
+			// an exported userPassword is already hashed; slapd stores it as-is,
+			// which is what makes `export --with-hash` a usable migration
+			if err := cli.AddEntry(dn, u.AttributeMap(usercsv.Cell(row, cols, usercsv.Password), nil)); err != nil {
 				res.Failed = append(res.Failed, importIssue{login, err.Error()})
 				if userImportStopOnError {
 					return fmt.Errorf("create %s: %w", login, err)
@@ -94,8 +116,8 @@ var userImportCmd = &cobra.Command{
 			}
 			res.Created = append(res.Created, dn)
 
-			if group != "" {
-				if err := addToGroup(cli, group, u.DN(cfg.UserOU, cfg.BaseDN)); err != nil {
+			if group := usercsv.Cell(row, cols, usercsv.Group); group != "" {
+				if err := addToGroup(cli, group, dn); err != nil {
 					res.Warnings = append(res.Warnings, importIssue{login, "group " + group + ": " + err.Error()})
 				}
 			}
@@ -116,14 +138,6 @@ func toLDIF(entries []*ldapx.Entry) []ldif.Entry {
 		out = append(out, le)
 	}
 	return out
-}
-
-func isHeader(first string) bool {
-	switch first {
-	case "login", "uid", "firstname.lastname", "user", "username":
-		return true
-	}
-	return false
 }
 
 func addToGroup(cli *ldapx.Client, group, memberDN string) error {
@@ -172,9 +186,14 @@ var (
 var userExportCmd = &cobra.Command{
 	Use:   "export",
 	Short: "Export users to stdout as CSV (or LDIF with --ldif)",
-	Long: "Writes CSV (uid,cn,sn,givenName,displayName,mail) to stdout. The global\n" +
-		"-o flag does not apply here. --with-hash appends the userPassword column.\n" +
-		"--ldif writes full entries as LDIF (re-importable with import-ldif).",
+	Long: "Writes CSV (uid,cn,sn,givenName,displayName,mail) to stdout, with a header\n" +
+		"row `users import` reads back by name — so an export imports as itself.\n" +
+		"The global -o flag does not apply here.\n\n" +
+		"--with-hash appends userPassword, which import stores as the hash it is:\n" +
+		"that is what makes the pair a migration rather than a listing.\n\n" +
+		"Group MEMBERSHIPS are not in there, and cannot be: they live on the group\n" +
+		"entries, not the users'. This is a copy of the people, not of the tree —\n" +
+		"--ldif writes full entries instead (re-importable with import-ldif).",
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cli, err := connect()

@@ -112,13 +112,13 @@ func cleanup() {
 	// Groups first: a user that is some group's only member cannot be deleted
 	// without emptying it, which the groupOfNames schema forbids — so a leftover
 	// group would block the user deletes below.
-	for _, g := range []string{"e2e.devs", "e2e.eng", "e2e.refs", "e2e.solo"} {
+	for _, g := range []string{"e2e.devs", "e2e.eng", "e2e.refs", "e2e.solo", "e2e.rtg"} {
 		try(admin, adPW, "group", "delete", g)
 	}
 	// delete each individually — a single missing login would abort a variadic
 	// `users delete`, leaving the rest behind.
 	for _, u := range []string{"e2e.alpha", "e2e.beta", "e2e.gamma", "e2e.delta", "e2e.epsilon", "e2e.bak", "e2e.lockme",
-		"e2e.ref1", "e2e.ref2", "e2e.ref3"} {
+		"e2e.ref1", "e2e.ref2", "e2e.ref3", "e2e.rt", "e2e.legacy", "e2e.reorder"} {
 		try(admin, adPW, "user", "delete", u)
 	}
 	try(admin, adPW, "svc", "revoke", "e2e.svc") // a failed svc subtest would leave its grants behind
@@ -386,6 +386,52 @@ func TestCLI(t *testing.T) {
 		run(t, admin, adPW, "config", "acl", "revoke", db, "--group", "cn=e2e.eng,ou=groups,dc=example,dc=org")
 	})
 
+	// The migration move: export from one server, import into the next. The two
+	// formats used to be unrelated, so this landed `sn` in `mail` on every user
+	// and reported success.
+	t.Run("csv-roundtrip", func(t *testing.T) {
+		run(t, admin, adPW, "user", "add", "e2e.rt", "--password", "LongPassword12345")
+		defer try(admin, adPW, "user", "delete", "e2e.rt")
+		// --force: replacing the derived mail is the intent here; the guard
+		// asking about it is asserted in the `bulk` subtest
+		run(t, admin, adPW, "user", "set", "e2e.rt", "mail", "custom@elsewhere.org", "--force")
+
+		dump := tmpFile(t, run(t, admin, adPW, "users", "export", "--with-hash"))
+		run(t, admin, adPW, "user", "delete", "e2e.rt")
+		has(t, run(t, admin, adPW, "users", "import", dump), "+ cn=e2e.rt,ou=users")
+
+		got := run(t, admin, adPW, "user", "info", "e2e.rt")
+		// every column must land where it came from — not one to the left
+		for _, want := range []string{"custom@elsewhere.org", "uid:         e2e.rt", "sn:          Rt"} {
+			has(t, got, want)
+		}
+		// the hash is a hash: the re-imported user binds with the ORIGINAL
+		// password, which is the only thing that makes this a migration
+		if _, _, err := try("cn=e2e.rt,ou=users,dc=example,dc=org", "LongPassword12345", "whoami"); err != nil {
+			t.Errorf("re-imported user cannot bind with its original password: %v", err)
+		}
+
+		// the headerless layout is login[,group][,mail] and must keep working.
+		// Its own group: the shared ones come and go with other subtests.
+		run(t, admin, adPW, "group", "create", "e2e.rtg", "--member", "e2e.rt")
+		defer try(admin, adPW, "group", "delete", "e2e.rtg")
+		legacy := tmpFile(t, "e2e.legacy,e2e.rtg,legacy@elsewhere.org\n")
+		defer try(admin, adPW, "user", "delete", "e2e.legacy")
+		has(t, run(t, admin, adPW, "users", "import", legacy), "+ cn=e2e.legacy,ou=users")
+		has(t, run(t, admin, adPW, "user", "info", "e2e.legacy"), "legacy@elsewhere.org")
+		has(t, run(t, admin, adPW, "group", "info", "e2e.rtg"), "cn=e2e.legacy")
+
+		// Columns are read by name, so their order must not matter: mail sits at
+		// index 1 here and index 5 in an export. (The login column stays first —
+		// that is what marks the row as a header rather than data.)
+		reordered := tmpFile(t, "uid,mail,sn\ne2e.reorder,reordered@elsewhere.org,Surname\n")
+		defer try(admin, adPW, "user", "delete", "e2e.reorder")
+		has(t, run(t, admin, adPW, "users", "import", reordered), "+ cn=e2e.reorder,ou=users")
+		got = run(t, admin, adPW, "user", "info", "e2e.reorder")
+		has(t, got, "reordered@elsewhere.org")
+		has(t, got, "sn:          Surname") // not the "Reorder" the login would derive
+	})
+
 	t.Run("bulk", func(t *testing.T) {
 		csv := tmpFile(t, "login\ne2e.gamma\ne2e.delta\n")
 		has(t, run(t, admin, adPW, "users", "import", csv), "imported 2")
@@ -399,8 +445,33 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "import-ldif", ldifFile), "imported 1")
 		has(t, run(t, admin, adPW, "user", "info", "e2e.epsilon"), "e2e.epsilon")
 
+		// `users set` REPLACES, and a batch is where a silent drop hurts most:
+		// the guard must fire per-user, exactly as the singular `user set` does
+		// --force: the user already has a derived mail, and replacing it is the
+		// setup's intent — the guard is right to ask, which is the next assertion
+		run(t, admin, adPW, "user", "set", "e2e.gamma", "mail", "a@example.org", "--force")
+		run(t, admin, adPW, "entry", "set", "cn=e2e.gamma,ou=users,dc=example,dc=org",
+			"mail", "--add", "b@example.org")
+		// A batch reports per-item failures in its RESULT and still exits 0 (see
+		// the partial-delete case below), so the refusal shows up there — not as
+		// a non-zero exit.
+		out := run(t, admin, adPW, "users", "set", "mail", "only@example.org", "e2e.gamma")
+		has(t, out, "0 ok, 1 failed")
+		has(t, out, "would delete")
+		// `entry get`, not `user info`: user info renders one value per attribute,
+		// so it cannot show whether the second mail survived
+		gamma := "cn=e2e.gamma,ou=users,dc=example,dc=org"
+		has(t, run(t, admin, adPW, "entry", "get", gamma), "b@example.org")
+		// ...and --force is the way through, same as the singular
+		run(t, admin, adPW, "users", "set", "mail", "only@example.org", "e2e.gamma", "--force")
+		got := run(t, admin, adPW, "entry", "get", gamma)
+		has(t, got, "only@example.org")
+		if strings.Contains(got, "b@example.org") {
+			t.Errorf("--force did not replace:\n%s", got)
+		}
+
 		// partial bulk delete: one existing + one missing -> per-item, not abort
-		out := run(t, admin, adPW, "users", "delete", "e2e.delta", "e2e.ghost.missing")
+		out = run(t, admin, adPW, "users", "delete", "e2e.delta", "e2e.ghost.missing")
 		has(t, out, "1 ok, 1 failed")
 		has(t, out, "e2e.ghost.missing")
 	})
