@@ -355,6 +355,28 @@ func TestCLI(t *testing.T) {
 		has(t, run(t, admin, adPW, "config", "acl", "list", db), "{"+last+"}to dn.subtree=\"ou=e2e.mv")
 		// --force does it anyway
 		has(t, run(t, root, rtPW, "config", "acl", "move", db, last, "4", "--force"), "moved olcAccess {"+last+"} to {4}")
+		run(t, root, rtPW, "config", "acl", "move", db, "4", last, "--force")
+
+		// `acl delete` removes one rule by its exact stored value. A DEAD rule
+		// (what lint reports) is the safe case: it grants nothing, so removing it
+		// changes nothing and needs no --force. It is also the only way out —
+		// `acl revoke` keeps a deliberate `by * none`.
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "[dead] {"+last+"}")
+		has(t, run(t, root, rtPW, "config", "acl", "delete", db, last), "deleted olcAccess {"+last+"}")
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "no dead or empty rules")
+		// deleting a LIVE rule hands its entries to whatever is below: refused
+		_, se, derr := try(root, rtPW, "config", "acl", "delete", db, "4")
+		if derr == nil {
+			t.Error("config acl delete: a live rule was deleted instead of refused")
+		}
+		for _, want := range []string{"would silently change access", "stop applying", "--force"} {
+			if !strings.Contains(se, want) {
+				t.Errorf("delete refusal missing %q in:\n%s", want, se)
+			}
+		}
+		if _, _, derr = try(root, rtPW, "config", "acl", "delete", db, "99"); derr == nil {
+			t.Error("config acl delete: a bad index was accepted")
+		}
 		// grant a group read on a subtree (by group.exact clause), then revoke
 		has(t, run(t, admin, adPW, "config", "acl", "grant", db, "ou=users,dc=example,dc=org", "--group", "e2e.devs", "--access", "read"),
 			`granted read to group.exact="cn=e2e.devs`)

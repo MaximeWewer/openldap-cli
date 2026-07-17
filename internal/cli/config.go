@@ -328,10 +328,10 @@ var aclMoveForce bool
 
 // moveRefusal spells out what a move would change, so the operator can decide
 // rather than discover it from a ticket weeks later.
-func moveRefusal(from, to int, m acl.MoveImpact) string {
+func moveRefusal(from, to int, m acl.Impact) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "moving {%d} to {%d} would silently change access:\n", from, to)
-	fmt.Fprintf(&b, "\n  the rule being moved:\n    %s\n", m.Moved)
+	fmt.Fprintf(&b, "\n  the rule being moved:\n    %s\n", m.Rule)
 	if len(m.Lost) > 0 {
 		fmt.Fprintf(&b, "\n  it does not end in `by * break`, so on the entries it covers it now\n"+
 			"  answers instead of this rule:\n    %s\n", m.Decided)
@@ -346,6 +346,90 @@ func moveRefusal(from, to int, m acl.MoveImpact) string {
 		fmt.Fprintf(&b, "\n  this rule becomes unreachable, granting nothing:\n    {%d} %s\n    %s\n", f.Index, f.Rule, f.Message)
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// ---- acl delete ---------------------------------------------------------
+
+var aclDeleteForce bool
+
+// deleteRefusal spells out what removing a live rule would change.
+func deleteRefusal(index int, m acl.Impact) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "deleting {%d} would silently change access:\n", index)
+	fmt.Fprintf(&b, "\n  the rule being deleted:\n    %s\n", m.Rule)
+	if len(m.Lost) > 0 {
+		fmt.Fprintf(&b, "\n  it answers for those entries today; without it this rule does:\n    %s\n",
+			cmp(m.Now, "(none — no rule below covers them, so access there falls back to denied)"))
+		b.WriteString("\n  these clauses stop applying (their identities lose that access, and see\n" +
+			"  noSuchObject rather than an error):\n")
+		for _, c := range m.Lost {
+			fmt.Fprintf(&b, "    %s\n", c)
+		}
+	}
+	for _, f := range m.Dead {
+		fmt.Fprintf(&b, "\n  this rule becomes unreachable, granting nothing:\n    {%d} %s\n    %s\n", f.Index, f.Rule, f.Message)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// cmp returns s, or alt when s is empty.
+func cmp(s, alt string) string {
+	if strings.TrimSpace(s) == "" {
+		return alt
+	}
+	return s
+}
+
+var configACLDeleteCmd = &cobra.Command{
+	Use:     "delete <database-dn> <index>",
+	Aliases: []string{"del", "rm"},
+	Short:   "Delete the olcAccess rule at {index}",
+	Long: "Removes one rule, by the exact value the server holds — olcAccess is\n" +
+		"ordered, so deleting renumbers every rule below it and a delete by index\n" +
+		"alone would race with that. The other rules are left untouched (no\n" +
+		"whole-attribute rewrite).\n\n" +
+		"Removing a rule that never fires — one `config acl lint` reports as dead —\n" +
+		"changes nothing and is the point of this command: `acl revoke` deliberately\n" +
+		"keeps a `by * none`, so a dead rule has no other way out.\n\n" +
+		"Deleting a LIVE rule hands its entries to whatever rule sits below, which\n" +
+		"changes who has access; that is refused, with the clauses it would drop\n" +
+		"named. --force does it anyway.",
+	Args: cobra.ExactArgs(2),
+	Example: "  openldap-cli config acl lint 'olcDatabase={1}mdb,cn=config'   # find the dead rule\n" +
+		"  openldap-cli config acl delete 'olcDatabase={1}mdb,cn=config' 11",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		db := strings.TrimSpace(args[0])
+		index, err := strconv.Atoi(strings.Trim(args[1], "{}"))
+		if err != nil {
+			return fmt.Errorf("index %q: not a number", args[1])
+		}
+		cc, err := connectConfig()
+		if err != nil {
+			return err
+		}
+		defer cc.Close()
+
+		e, err := cc.ReadEntry(db, []string{"olcAccess"})
+		if err != nil {
+			return err
+		}
+		value, impact, err := acl.InspectDelete(e.GetAll("olcAccess"), index)
+		if err != nil {
+			return err
+		}
+		if !impact.Empty() && !aclDeleteForce {
+			return fmt.Errorf("%s\n\nre-run with --force to do it anyway", deleteRefusal(index, impact))
+		}
+		if !impact.Empty() {
+			log.Warn().Int("rule", index).Msg("--force: deleting a rule that changes access\n" + deleteRefusal(index, impact))
+		}
+		// delete the exact stored value: surgical, and the server renumbers
+		if err := cc.Modify(db, []ldapx.Mod{{Op: ldapx.ModDelete, Name: "olcAccess", Values: []string{value}}}); err != nil {
+			return fmt.Errorf("delete olcAccess {%d} on %s: %w", index, db, err)
+		}
+		log.Debug().Str("db", db).Int("index", index).Msg("olcAccess rule deleted")
+		return out.Emit(okResult{Action: fmt.Sprintf("deleted olcAccess {%d} on", index), DN: db, Detail: value})
+	},
 }
 
 var configACLMoveCmd = &cobra.Command{
@@ -712,6 +796,7 @@ func init() {
 	configOverlayDisableCmd.Flags().BoolVar(&overlayPurge, "purge", false, "delete the overlay entry and its settings instead of just deactivating it")
 	configOverlayCmd.AddCommand(configOverlayListCmd, configOverlayEnableCmd, configOverlayDisableCmd)
 	configACLMoveCmd.Flags().BoolVar(&aclMoveForce, "force", false, "apply the move even if it changes who has access")
+	configACLDeleteCmd.Flags().BoolVar(&aclDeleteForce, "force", false, "delete even if the rule is live and its removal changes who has access")
 	configACLGrantCmd.Flags().StringVar(&aclGrantGroup, "group", "", "grant to all members of this group (name or DN)")
 	configACLGrantCmd.Flags().StringVar(&aclGrantDN, "dn", "", "grant to this exact DN")
 	configACLGrantCmd.Flags().StringVar(&aclGrantAccess, "access", "read", "access level: none|disclose|auth|compare|search|read|write|manage")
@@ -721,7 +806,8 @@ func init() {
 	configACLGrantCmd.Flags().StringVar(&aclGrantTerm, "terminator", "break", "trailing `by *` of a NEW rule: break (additive) or none (blocks others)")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeGroup, "group", "", "the group (name or DN) to revoke")
 	configACLRevokeCmd.Flags().StringVar(&aclRevokeDN, "dn", "", "the exact DN to revoke")
-	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd, configACLLintCmd)
+	configACLCmd.AddCommand(configACLListCmd, configACLMoveCmd, configACLGrantCmd, configACLRevokeCmd,
+		configACLDeleteCmd, configACLLintCmd)
 	configCmd.AddCommand(configLimitsCmd, configDBCmd, configOverlayCmd, configACLCmd, configSetCmd)
 	rootCmd.AddCommand(configCmd)
 }

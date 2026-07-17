@@ -264,6 +264,7 @@ an orphan `to <subtree> by * none` (same as the bash script).
 | `config acl list <database-dn>`                                                | show `olcAccess` rules on a database                                                                                     |
 | `config acl move <database-dn> <from> <to> [--force]`                          | reorder an `olcAccess` rule (renumbers the rest, live) — fixes a specific rule shadowed by a broader one placed above it. **Refused** when the move would silently change access: it names the clauses that would stop applying, or the rule that would become unreachable; `--force` applies it anyway |
 | `config acl grant <database-dn> <target> --access <a> (--group <g> \| --dn <d>) [--scope sub\|base] [--filter '(…)'] [--at N] [--terminator break\|none]` | add a `by <who> <access>` clause; `--group` grants **all its members**; `--scope base` grants the container only (needed to *search* a tree); `--filter` narrows the rule to matching entries (least privilege); new rules end in `by * break` (additive) and are **auto-placed above the rule that would shadow them** — `--at N` overrides, and a grant that still cannot fire is reported |
+| `config acl delete <database-dn> <index> [--force]`                             | delete one rule, by the exact value the server holds (the rest are untouched; the server renumbers). Removing a **dead** rule — one `lint` reports — changes nothing and is the point: `revoke` keeps a deliberate `by * none`, so a dead rule has no other way out. Deleting a **live** rule is **refused**, naming the clauses that would stop applying; `--force` overrides |
 | `config acl revoke <database-dn> (--group <g> \| --dn <d>)`                      | remove every clause referencing that group or DN, and **drop the rules left with nothing to say** (a rule whose last clause was the revoked one — slapd rejects a clauseless rule, which used to fail the whole revoke — or one left as a no-op `by * break`). An explicit `by * none` deny is kept: dropping it would widen access |
 | `config acl lint <database-dn>`                                                 | report rules that can never fire — a specific rule shadowed by a broader one above it (the classic "grant with no effect" / `noSuchObject`), and rules left doing nothing after a revoke |
 | `config set <dn> <attr> [value…]`                                              | set/delete any `cn=config` attribute (e.g. `olcAccessLogSuccess`)                                                        |
@@ -342,6 +343,15 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   new rule **above** the one that would shadow it, and report a grant that still
   cannot fire. For rules written by other means, **`config acl lint` finds them**
   and `config acl move` raises them.
+- **A dead rule needs `config acl delete`, not `revoke`.** `config acl revoke`
+  strips a grantee's clauses and drops the rules that empty out — but it keeps a
+  rule left as `by * none`, because an explicit deny is not leftover noise. So a
+  rule that `lint` reports as dead (unreachable, granting nothing) survives every
+  revoke. `config acl delete <db> <index>` removes it by the **exact value the
+  server holds**, leaving the other rules untouched — deleting renumbers
+  everything below, so a delete by index alone would race with that. It refuses
+  to remove a **live** rule (whose entries would fall to whatever sits below),
+  naming the clauses that would stop applying; `--force` overrides.
 - **Reordering decides who answers — `config acl move` refuses to do that
   silently.** Raising a rule that does not end in `by * break` above a broader one
   takes the broader rule's grantees off the entries it covers (rootDN excepted):

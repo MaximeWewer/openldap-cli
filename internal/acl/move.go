@@ -5,27 +5,32 @@ import (
 	"strings"
 )
 
-// Reordering olcAccess is not just cosmetic: slapd stops at the first rule whose
-// `to` matches, so moving a rule changes WHICH rule decides for the entries it
-// covers. Raising a rule that ends in `by * none` above a broader one takes the
-// broader rule's grantees off those entries — silently, and `Lint` cannot see it
-// (nothing became unreachable; the broader rule still decides everywhere else).
-// InspectMove is that missing check.
+// Editing the ORDER or the MEMBERSHIP of olcAccess is not cosmetic: slapd stops
+// at the first rule whose `to` matches, so moving or deleting a rule changes
+// WHICH rule decides for the entries it covers. Raising a rule that ends in
+// `by * none` above a broader one takes the broader rule's grantees off those
+// entries; deleting the rule that answered for them hands the question to
+// whatever sits below. Both happen silently, and `Lint` cannot see either
+// (nothing became unreachable; the other rules still decide everywhere else).
+// Impact is that missing check, shared by both edits.
 
-// MoveImpact is what a reorder would silently change.
-type MoveImpact struct {
-	Moved string // the rule being moved
-	// Lost are the `by` clauses that stop applying to Moved's entries, because
+// Impact is what an olcAccess edit would silently change.
+type Impact struct {
+	Rule string // the rule being moved or deleted
+	// Lost are the `by` clauses that stop applying to Rule's entries, because
 	// the rule that used to decide for them no longer gets the chance.
 	Lost []string
-	// Decided is the rule that used to decide for Moved's entries.
+	// Decided is the rule that decided for Rule's entries BEFORE the edit.
 	Decided string
-	// Dead are the rules the move newly makes unreachable.
+	// Now is the rule that decides for them AFTER it — empty when no rule
+	// covers them any more, i.e. access there falls back to denied.
+	Now string
+	// Dead are the rules the edit newly makes unreachable.
 	Dead []Finding
 }
 
-// Empty reports whether the move changes nothing beyond the order itself.
-func (m MoveImpact) Empty() bool { return len(m.Lost) == 0 && len(m.Dead) == 0 }
+// Empty reports whether the edit changes nothing but the list itself.
+func (m Impact) Empty() bool { return len(m.Lost) == 0 && len(m.Dead) == 0 }
 
 // ruleSelector returns the parsed `to …` part of a rule body.
 func ruleSelector(body string) selector {
@@ -65,41 +70,29 @@ func indexed(bodies []string) []string {
 // findingKey identifies a finding across the before/after lists.
 func findingKey(f Finding) string { return f.Level + "\x00" + f.Rule }
 
-// InspectMove reports what moving rule `from` to position `to` would change
-// beyond the order, and returns the resulting rule bodies (unindexed, in order)
-// ready for a single olcAccess replace.
+// inspect compares the before/after rule lists and reports what changes for the
+// entries `rule` covers.
 //
 // The analysis is deliberately conservative: it reasons about full coverage
 // (`covers`), so it reports what it can prove and stays quiet on rules that only
-// partially overlap — it is a guard against the known trap, not a simulator of
+// partially overlap — it is a guard against the known traps, not a simulator of
 // slapd.
-func InspectMove(values []string, from, to int) (bodies []string, impact MoveImpact, err error) {
-	bodies, err = Reorder(values, from, to)
-	if err != nil {
-		return nil, MoveImpact{}, err
-	}
-	before := splitRules(values)
-	afterValues := indexed(bodies)
-	after := splitRules(afterValues)
-
-	if to < 0 || to >= len(bodies) {
-		return bodies, MoveImpact{}, nil
-	}
-	impact.Moved = bodies[to]
-	sel := ruleSelector(impact.Moved)
+func inspect(beforeValues, afterValues []string, rule string) Impact {
+	impact := Impact{Rule: rule}
+	sel := ruleSelector(rule)
 
 	// who used to decide for these entries, and who does now
-	wasDecided := firstDecider(before, sel)
-	nowDecided := firstDecider(after, sel)
+	wasDecided := firstDecider(splitRules(beforeValues), sel)
+	nowDecided := firstDecider(splitRules(afterValues), sel)
 	if wasDecided != "" && wasDecided != nowDecided {
-		impact.Decided = wasDecided
+		impact.Decided, impact.Now = wasDecided, nowDecided
 		kept := map[string]bool{}
 		for _, c := range byClauses(nowDecided) {
 			kept[strings.TrimSpace(c)] = true
 		}
 		for _, c := range byClauses(wasDecided) {
 			c = strings.TrimSpace(c)
-			// `by * none` losing its place is the point of the move, not a loss
+			// `by * none` losing its place is the point of the edit, not a loss
 			if kept[c] || strings.HasPrefix(c, "* ") {
 				continue
 			}
@@ -107,9 +100,9 @@ func InspectMove(values []string, from, to int) (bodies []string, impact MoveImp
 		}
 	}
 
-	// rules the move newly makes unreachable
+	// rules the edit newly makes unreachable (ones already dead are not its doing)
 	had := map[string]bool{}
-	for _, f := range Lint(values) {
+	for _, f := range Lint(beforeValues) {
 		had[findingKey(f)] = true
 	}
 	for _, f := range Lint(afterValues) {
@@ -117,5 +110,19 @@ func InspectMove(values []string, from, to int) (bodies []string, impact MoveImp
 			impact.Dead = append(impact.Dead, f)
 		}
 	}
-	return bodies, impact, nil
+	return impact
+}
+
+// InspectMove reports what moving rule `from` to position `to` would change
+// beyond the order, and returns the resulting rule bodies (unindexed, in order)
+// ready for a single olcAccess replace.
+func InspectMove(values []string, from, to int) (bodies []string, impact Impact, err error) {
+	bodies, err = Reorder(values, from, to)
+	if err != nil {
+		return nil, Impact{}, err
+	}
+	if to < 0 || to >= len(bodies) {
+		return bodies, Impact{}, nil
+	}
+	return bodies, inspect(values, indexed(bodies), bodies[to]), nil
 }
