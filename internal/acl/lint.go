@@ -27,45 +27,148 @@ type selector struct {
 	scope  string // base | one | children | subtree | regex (dn kind only)
 	dn     string // lower-cased target DN (dn kind only)
 	filter bool   // the selector is narrowed by filter=(…)
+	attrs  string // the attribute list it is narrowed to ("" = the whole entry)
 }
 
-// parseSelector parses `to *`, `to attrs=x`, `to dn.subtree="X" filter=(…)`, …
+// normalizeScope maps slapd.access(5)'s dnstyle synonyms onto one spelling.
+// Missing one is not cosmetic: an unknown scope makes covers() give up, so a
+// perfectly ordinary `dn.sub=` rule would stop being seen as shadowing anything.
+func normalizeScope(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "base", "baseobject", "exact", "":
+		return "base" // slapd.access(5): base is the default, exact is an alias
+	case "one", "onelevel":
+		return "one"
+	case "sub", "subtree":
+		return "subtree"
+	case "children":
+		return "children"
+	default:
+		return strings.ToLower(strings.TrimSpace(s)) // regex, or something new
+	}
+}
+
+// selectorParts splits a `to …` body into its additive parts. slapd.access(5):
+// "The dn, filter, and attrs statements are additive; they can be used in
+// sequence" — so a selector can carry all three, and a naive split on the first
+// `=` swallows the ones that follow into the DN.
+//
+// Quoted DNs and parenthesised filters are kept whole, since both may contain
+// the spaces and `=` this would otherwise split on.
+func selectorParts(body string) []string {
+	var parts []string
+	for i := 0; i < len(body); {
+		for i < len(body) && body[i] == ' ' {
+			i++
+		}
+		if i >= len(body) {
+			break
+		}
+		start := i
+		for i < len(body) && body[i] != '=' && body[i] != ' ' {
+			i++
+		}
+		if i < len(body) && body[i] == '=' {
+			i = scanValue(body, i+1)
+		}
+		parts = append(parts, body[start:i]) // a bare token (`*`) lands here too
+	}
+	return parts
+}
+
+// scanValue returns the index just past the value starting at i: a quoted DN, a
+// parenthesised filter, or a bare run up to the next space.
+func scanValue(body string, i int) int {
+	if i >= len(body) {
+		return i
+	}
+	switch body[i] {
+	case '"':
+		for i++; i < len(body) && body[i] != '"'; i++ {
+		}
+		if i < len(body) {
+			i++ // closing quote
+		}
+	case '(':
+		depth := 0
+		for ; i < len(body); i++ {
+			if body[i] == '(' {
+				depth++
+			} else if body[i] == ')' {
+				if depth--; depth == 0 {
+					return i + 1
+				}
+			}
+		}
+	default:
+		for ; i < len(body) && body[i] != ' '; i++ {
+		}
+	}
+	return i
+}
+
+// parseSelector parses `to *`, `to attrs=x`, `to dn.subtree="X" filter=(…)`,
+// `to dn.sub="X" attrs=mail`, …
 func parseSelector(s string) selector {
 	sel := selector{raw: strings.TrimSpace(s)}
 	body := strings.TrimSpace(strings.TrimPrefix(sel.raw, "to "))
-	if i := strings.Index(body, " filter="); i >= 0 {
-		sel.filter = true
-		body = strings.TrimSpace(body[:i])
-	}
-	switch {
-	case body == "*":
+	if body == "*" {
 		sel.kind = "*"
-	case strings.HasPrefix(body, "attrs="):
-		sel.kind = "attrs"
-	case strings.HasPrefix(body, "dn."):
-		sel.kind = "dn"
-		rest := strings.TrimPrefix(body, "dn.")
-		scope, dn, ok := strings.Cut(rest, "=")
+		return sel
+	}
+	for _, p := range selectorParts(body) {
+		key, val, ok := strings.Cut(p, "=")
 		if !ok {
 			sel.kind = "other"
 			return sel
 		}
-		sel.scope = strings.ToLower(strings.TrimSpace(scope))
-		if sel.scope == "exact" { // exact and base are synonyms
-			sel.scope = "base"
+		switch k := strings.ToLower(key); {
+		case k == "filter":
+			sel.filter = true
+		case k == "attrs":
+			sel.attrs = strings.ToLower(val)
+			if sel.kind == "" {
+				sel.kind = "attrs"
+			}
+		case k == "dn" || strings.HasPrefix(k, "dn."):
+			sel.kind = "dn"
+			// `dn=<DN>` with no style is legal — slapd.access(5) makes base the
+			// default — so an empty scope must normalize to base, not be dropped.
+			sel.scope = normalizeScope(strings.TrimPrefix(k, "dn."))
+			if k == "dn" {
+				sel.scope = "base"
+			}
+			sel.dn = strings.ToLower(strings.Trim(strings.TrimSpace(val), `"`))
+		default:
+			// val=, or anything slapd grows later: not something we can reason about
+			sel.kind = "other"
+			return sel
 		}
-		sel.dn = strings.ToLower(strings.Trim(strings.TrimSpace(dn), `"`))
-	default:
+	}
+	if sel.kind == "" {
 		sel.kind = "other"
 	}
 	return sel
 }
 
-// covers reports whether every entry matched by b is already matched by a — i.e.
-// a, being earlier, always decides first. A filtered a matches only a subset, so
-// it is never treated as covering (we cannot prove it statically).
+// covers reports whether every access matched by b is already matched by a —
+// i.e. a, being earlier, always decides first.
+//
+// It must only claim coverage it can prove: a false "yes" would call a live rule
+// dead, or place a grant above a rule that was not in its way. Anything it
+// cannot reason about (a filter, a regex, a `one` scope, an attribute list it
+// cannot compare) is therefore a "no", at the cost of missing some real
+// shadowing.
 func covers(a, b selector) bool {
+	// a matches only the entries its filter selects — a subset we cannot
+	// enumerate, so it may leave some of b's entries for b to answer.
 	if a.filter {
+		return false
+	}
+	// The same, one dimension over: a narrowed to some attributes cannot cover
+	// an access to the others. Equal lists cancel out; the rest is not provable
+	// without parsing the list (a covering superset reads as a miss, not a lie).
+	if a.attrs != "" && a.attrs != b.attrs {
 		return false
 	}
 	if a.kind == "*" {
@@ -82,7 +185,12 @@ func covers(a, b selector) bool {
 		return b.scope == "base" && b.dn == a.dn
 	case "children":
 		return strings.HasSuffix(b.dn, ","+a.dn)
-	default: // one, regex, … — not provable
+	case "one":
+		// a matches b's entries only if they all sit exactly one level under a;
+		// provable when b is that single entry.
+		return b.scope == "base" && strings.HasSuffix(b.dn, ","+a.dn) &&
+			!strings.Contains(strings.TrimSuffix(b.dn, ","+a.dn), ",")
+	default: // regex, or a style we do not know — not provable
 		return false
 	}
 }
