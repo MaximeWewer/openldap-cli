@@ -1,6 +1,9 @@
 package acl
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // slapd.access(5): "The dn, filter, and attrs statements are additive; they can
 // be used in sequence". A selector carrying more than one part must not let the
@@ -11,19 +14,19 @@ func TestParseSelectorAdditiveParts(t *testing.T) {
 		kind   string
 		scope  string
 		dn     string
-		filter bool
+		filter string
 		attrs  string
 	}{
-		{`to *`, "*", "", "", false, ""},
-		{`to dn.subtree="ou=users,dc=example,dc=org"`, "dn", "subtree", "ou=users,dc=example,dc=org", false, ""},
+		{`to *`, "*", "", "", "", ""},
+		{`to dn.subtree="ou=users,dc=example,dc=org"`, "dn", "subtree", "ou=users,dc=example,dc=org", "", ""},
 		// the bug: `attrs=` used to end up inside the DN
-		{`to dn.subtree="ou=users,dc=example,dc=org" attrs=mail`, "dn", "subtree", "ou=users,dc=example,dc=org", false, "mail"},
+		{`to dn.subtree="ou=users,dc=example,dc=org" attrs=mail`, "dn", "subtree", "ou=users,dc=example,dc=org", "", "mail"},
 		{`to dn.subtree="ou=users,dc=example,dc=org" filter=(objectClass=person) attrs=cn,mail`,
-			"dn", "subtree", "ou=users,dc=example,dc=org", true, "cn,mail"},
-		// a filter carrying spaces and parens must stay in one piece
-		{`to dn.base="dc=example,dc=org" filter=(&(a=b)(c=d))`, "dn", "base", "dc=example,dc=org", true, ""},
-		{`to attrs=userPassword`, "attrs", "", "", false, "userpassword"},
-		{`to attrs=userPassword,shadowLastChange`, "attrs", "", "", false, "userpassword,shadowlastchange"},
+			"dn", "subtree", "ou=users,dc=example,dc=org", "(objectclass=person)", "cn,mail"},
+		// a filter carrying parens must stay in one piece
+		{`to dn.base="dc=example,dc=org" filter=(&(a=b)(c=d))`, "dn", "base", "dc=example,dc=org", "(&(a=b)(c=d))", ""},
+		{`to attrs=userPassword`, "attrs", "", "", "", "userpassword"},
+		{`to attrs=userPassword,shadowLastChange`, "attrs", "", "", "", "userpassword,shadowlastchange"},
 	} {
 		got := parseSelector(tc.in)
 		if got.kind != tc.kind || got.scope != tc.scope || got.dn != tc.dn || got.filter != tc.filter || got.attrs != tc.attrs {
@@ -99,6 +102,57 @@ func TestCoversOneLevel(t *testing.T) {
 	// a whole subtree below is not fully matched by a one-level rule
 	if covers(a, parseSelector(`to dn.subtree="cn=kid,ou=q,dc=example,dc=org"`)) {
 		t.Error("dn.one must not cover a subtree")
+	}
+}
+
+// Inject must find the EXISTING rule for a target however it is spelled, or it
+// adds a second rule slapd never reaches (the first already decided).
+func TestInjectMatchesSpellingVariants(t *testing.T) {
+	who := DNWho("cn=app,dc=example,dc=org")
+	o := InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "subtree", Who: who, Access: "read", At: -1}
+	for _, spelling := range []string{
+		`{0}to dn.subtree="ou=users,dc=example,dc=org" by * none`,
+		`{0}to dn.sub="ou=users,dc=example,dc=org" by * none`,
+		`{0}to dn.sub="OU=Users,DC=Example,DC=Org" by * none`, // DNs compare case-insensitively
+	} {
+		edit, appended := Inject([]string{spelling}, o)
+		if appended {
+			t.Errorf("Inject(%q): created a second rule for the same target", spelling)
+		}
+		if !strings.Contains(edit.Add, who) {
+			t.Errorf("Inject(%q): clause not added to the existing rule (Add=%q)", spelling, edit.Add)
+		}
+	}
+	// base and subtree are different targets — no merging across them
+	if _, appended := Inject([]string{`{0}to dn.base="ou=users,dc=example,dc=org" by * none`}, o); !appended {
+		t.Error("Inject: a dn.base rule must not absorb a dn.subtree grant")
+	}
+}
+
+// A rule narrowed by a filter or an attribute list is a different rule: adding
+// the clause there would grant on entries the caller never asked about.
+func TestInjectDoesNotMatchNarrowedRules(t *testing.T) {
+	o := InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "subtree",
+		Who: DNWho("cn=app,dc=example,dc=org"), Access: "read", At: -1}
+	for _, narrowed := range []string{
+		`{0}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=example,dc=org) by * none`,
+		`{0}to dn.subtree="ou=users,dc=example,dc=org" attrs=mail by * none`,
+	} {
+		if _, appended := Inject([]string{narrowed}, o); !appended {
+			t.Errorf("Inject(%q): merged into a narrowed rule; it must make its own", narrowed)
+		}
+	}
+	// ...and a grant WITH the same filter does find its rule
+	f := InjectOpts{Target: "ou=users,dc=example,dc=org", Scope: "subtree",
+		Filter: "(memberOf=cn=g,dc=example,dc=org)", Who: DNWho("cn=app,dc=example,dc=org"), Access: "read", At: -1}
+	if _, appended := Inject([]string{`{0}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=example,dc=org) by * none`}, f); appended {
+		t.Error("Inject: a grant with the same filter must reuse that rule")
+	}
+	// two DIFFERENT filters must never be merged
+	g := f
+	g.Filter = "(memberOf=cn=other,dc=example,dc=org)"
+	if _, appended := Inject([]string{`{0}to dn.subtree="ou=users,dc=example,dc=org" filter=(memberOf=cn=g,dc=example,dc=org) by * none`}, g); !appended {
+		t.Error("Inject: rules with different filters were treated as the same rule")
 	}
 }
 

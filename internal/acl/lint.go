@@ -22,11 +22,15 @@ type Finding struct {
 
 // selector is the parsed `to …` part of a rule.
 type selector struct {
-	raw    string
-	kind   string // "*" | "attrs" | "dn" | "other"
-	scope  string // base | one | children | subtree | regex (dn kind only)
-	dn     string // lower-cased target DN (dn kind only)
-	filter bool   // the selector is narrowed by filter=(…)
+	raw   string
+	kind  string // "*" | "attrs" | "dn" | "other"
+	scope string // base | one | children | subtree | regex (dn kind only)
+	dn    string // lower-cased target DN (dn kind only)
+	// filter is the LDAP filter narrowing the selector, lower-cased ("" = none).
+	// The text matters, not just its presence: two rules on the same tree with
+	// DIFFERENT filters are different rules, and treating them as one would
+	// inject a grant into the wrong one.
+	filter string
 	attrs  string // the attribute list it is narrowed to ("" = the whole entry)
 }
 
@@ -124,7 +128,7 @@ func parseSelector(s string) selector {
 		}
 		switch k := strings.ToLower(key); {
 		case k == "filter":
-			sel.filter = true
+			sel.filter = strings.ToLower(val)
 		case k == "attrs":
 			sel.attrs = strings.ToLower(val)
 			if sel.kind == "" {
@@ -162,7 +166,7 @@ func parseSelector(s string) selector {
 func covers(a, b selector) bool {
 	// a matches only the entries its filter selects — a subset we cannot
 	// enumerate, so it may leave some of b's entries for b to answer.
-	if a.filter {
+	if a.filter != "" {
 		return false
 	}
 	// The same, one dimension over: a narrowed to some attributes cannot cover
