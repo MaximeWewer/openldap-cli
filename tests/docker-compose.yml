@@ -1,4 +1,4 @@
-# Self-contained test OpenLDAP, faithful to MaximeWewer/openldap-setup
+# Self-contained test OpenLDAP, faithful to MaximeWewer/openldap-platform
 # (standalone). Bootstrap (cn=config + seed data) is done by bootstrap.sh BEFORE
 # this compose starts, via slapadd into ./testdata/slapd.d.
 networks:
