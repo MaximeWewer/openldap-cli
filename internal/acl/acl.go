@@ -95,6 +95,39 @@ func DNWho(dn string) string { return fmt.Sprintf(`dn.exact="%s"`, dn) }
 // to give several service accounts the same rights on a tree.
 func GroupWho(groupDN string) string { return fmt.Sprintf(`group.exact="%s"`, groupDN) }
 
+// MemberOfFilter builds the `filter=` that narrows a rule to the members of one
+// or more groups: one group gives `(memberOf=<dn>)`, several give an OR of them.
+// An empty list gives "" — no filter, i.e. the whole subtree.
+//
+// The output is canonical: de-duplicated and sorted. A grant is idempotent only
+// if the same set of groups always produces byte-identical text, because that
+// text IS the rule's identity — `--members-of a --members-of b` and the reverse
+// order must land in the one rule, not create a second one matching the same
+// entries (which the first would then shadow).
+func MemberOfFilter(groupDNs []string) string {
+	seen := map[string]bool{}
+	parts := make([]string, 0, len(groupDNs))
+	for _, dn := range groupDNs {
+		dn = strings.TrimSpace(dn)
+		// DN comparison is case-insensitive, so fold before de-duplicating —
+		// otherwise two spellings of one group would both end up in the filter
+		if dn == "" || seen[strings.ToLower(dn)] {
+			continue
+		}
+		seen[strings.ToLower(dn)] = true
+		parts = append(parts, "(memberOf="+dn+")")
+	}
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	default:
+		sort.Strings(parts)
+		return "(|" + strings.Join(parts, "") + ")"
+	}
+}
+
 // InjectOpts describes one olcAccess grant to inject.
 type InjectOpts struct {
 	Target string // the DN the rule protects

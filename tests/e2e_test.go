@@ -567,6 +567,31 @@ func TestCLI(t *testing.T) {
 		if _, se, rerr := try(admin, adPW, "svc", "revoke", "e2e.svc", "--tree", "ou=absent,dc=example,dc=org"); rerr == nil || !strings.Contains(se, "no access on ou=absent") {
 			t.Errorf("svc revoke on an ungranted tree: err=%v stderr=%s", rerr, se)
 		}
+
+		// --members-of is repeatable: "a member of X or Y" must be ONE rule with
+		// an OR filter. Without it the only way to express two groups was an
+		// unfiltered grant — wider than asked for.
+		db := "olcDatabase={1}mdb,cn=config"
+		g1 := "cn=e2e.devs,ou=groups,dc=example,dc=org"
+		g2 := "cn=e2e.mo2,ou=groups,dc=example,dc=org"
+		run(t, admin, adPW, "group", "create", "e2e.mo2", "--member", "user2.name")
+		defer try(admin, adPW, "group", "delete", "e2e.mo2")
+		defer try(admin, adPW, "svc", "revoke", "e2e.svc", "--tree", "ou=users,dc=example,dc=org")
+		run(t, admin, adPW, "svc", "grant", "e2e.svc", "--tree", "ou=users,dc=example,dc=org",
+			"--members-of", "e2e.devs", "--members-of", "e2e.mo2")
+		acls := run(t, admin, adPW, "config", "acl", "list", db)
+		want := "filter=(|(memberOf=" + g1 + ")(memberOf=" + g2 + "))"
+		has(t, acls, want)
+
+		// the filter is canonical, so the reverse order is the same rule — not a
+		// second one that the first would shadow
+		out2 := run(t, admin, adPW, "svc", "grant", "e2e.svc", "--tree", "ou=users,dc=example,dc=org",
+			"--members-of", "e2e.mo2", "--members-of", "e2e.devs")
+		has(t, out2, "already granted, unchanged")
+		if n := strings.Count(run(t, admin, adPW, "config", "acl", "list", db), "memberOf="+g1); n != 1 {
+			t.Errorf("reversed --members-of order made %d rules, want 1", n)
+		}
+		has(t, run(t, admin, adPW, "config", "acl", "lint", db), "no dead or empty rules")
 		// no --tree: everything the account still has (ou=policies + its own subtree)
 		has(t, run(t, admin, adPW, "svc", "revoke", "e2e.svc"), "everywhere")
 		has(t, run(t, admin, adPW, "svc", "delete", "e2e.svc"), "removed 0 ACL clause")
@@ -574,7 +599,6 @@ func TestCLI(t *testing.T) {
 
 		// the BULK delete must clean up too: a svcs delete that left the grant
 		// behind was a dead-ACL factory, and re-creating the name inherited it
-		db := "olcDatabase={1}mdb,cn=config"
 		run(t, admin, adPW, "svc", "add", "e2e.svc2", "--subtree", "ou=users,dc=example,dc=org", "--access", "write")
 		defer try(admin, adPW, "svc", "delete", "e2e.svc2")
 		has(t, run(t, admin, adPW, "config", "acl", "list", db), `cn=e2e.svc2,ou=service-accounts`)

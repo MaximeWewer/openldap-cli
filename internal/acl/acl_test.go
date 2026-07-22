@@ -331,3 +331,45 @@ func TestInjectIsIdempotent(t *testing.T) {
 		t.Error("a different access level must still be injected")
 	}
 }
+
+func TestMemberOfFilter(t *testing.T) {
+	a := "cn=devs,ou=groups,dc=x"
+	b := "cn=ops,ou=groups,dc=x"
+
+	if got := MemberOfFilter(nil); got != "" {
+		t.Errorf("no groups = %q, want empty (whole subtree)", got)
+	}
+	if got, want := MemberOfFilter([]string{a}), "(memberOf="+a+")"; got != want {
+		t.Errorf("one group = %q, want %q", got, want)
+	}
+
+	// several groups become an OR — the case svc grant could not express
+	want := "(|(memberOf=" + a + ")(memberOf=" + b + "))"
+	if got := MemberOfFilter([]string{a, b}); got != want {
+		t.Errorf("two groups = %q, want %q", got, want)
+	}
+
+	// The text IS the rule's identity, so the same set must always produce the
+	// same bytes — otherwise re-running a grant adds a second rule instead of
+	// being a no-op.
+	if got := MemberOfFilter([]string{b, a}); got != want {
+		t.Errorf("reversed order = %q, want the same canonical form %q", got, want)
+	}
+	if got := MemberOfFilter([]string{a, b, a}); got != want {
+		t.Errorf("duplicate = %q, want it collapsed to %q", got, want)
+	}
+	if got := MemberOfFilter([]string{a, strings.ToUpper(a)}); got != "(memberOf="+a+")" {
+		t.Errorf("case-variant duplicate = %q, want one clause", got)
+	}
+	// blanks are not groups
+	if got := MemberOfFilter([]string{"", "  ", a}); got != "(memberOf="+a+")" {
+		t.Errorf("blanks = %q", got)
+	}
+
+	// nothing caps it at two: N groups give an N-branch OR, still canonical
+	c := "cn=sre,ou=groups,dc=x"
+	wantN := "(|(memberOf=" + a + ")(memberOf=" + b + ")(memberOf=" + c + "))"
+	if got := MemberOfFilter([]string{c, a, b}); got != wantN {
+		t.Errorf("three groups = %q, want %q", got, wantN)
+	}
+}

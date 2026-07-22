@@ -248,7 +248,7 @@ non-zero.
 | `svc passwd <name> [--password]`                                                                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `svc delete <name>`                                                                             | deletes entry **and** strips its ACL clauses                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `svc info <name>`                                                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `svc grant <name> --tree DN [--members-of <group>] [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs - the container rule (so the tree can be used as a search base) plus the entry rule - each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) |
+| `svc grant <name> --tree DN [--members-of <group>]… [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs - the container rule (so the tree can be used as a search base) plus the entry rule - each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) and is **repeatable** - several groups become one OR filter in the same rule |
 | `svc revoke <name> [--tree DN]`                                                                 | the counterpart of `svc grant`: `--tree` undoes **one** grant (both its rules), leaving the account's access to other trees alone; without `--tree` it removes every clause the account has on the database. Co-grantees in the same rule keep their access; rules left with no grantee are dropped                                                                                                                                                                                         |
 
 `olcAccess` is ordered and edited in place (delete `{N}old` + add `{N}new`). A
@@ -506,6 +506,8 @@ other identity is affected:
 ```bash
 # read-only: the app may list ONLY the members of a group (least privilege)
 openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins
+# ...or of SEVERAL groups - repeat the flag: one OR filter, one rule
+openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins --members-of ops
 # read-only: the app may list every group
 openldap-cli svc grant app --tree ou=groups,dc=example,dc=org
 # read-write: the app may also create / modify / delete entries in the tree
@@ -525,6 +527,10 @@ The container access follows `--access`: `search` for a read grant, **`write` fo
 
 `--members-of` fits read and modify; a brand-new entry cannot match a `memberOf`
 filter before it exists, so **creating** entries needs an unfiltered grant.
+It is **repeatable**: `--members-of a --members-of b` means "a member of a or b"
+and produces a single rule with an OR filter, so two groups never force you back
+to a wider, unfiltered grant. The order does not matter - the filter is
+canonical, so re-running the same grant stays a no-op.
 
 Re-running is a no-op, so it is safe in a provisioning script. Prefer it over
 hand-writing `olcAccess`; drop to `config acl grant --scope/--filter` only when

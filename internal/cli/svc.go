@@ -45,7 +45,7 @@ func containerAccess(entryAccess string) string {
 
 var (
 	svcGrantTree      string
-	svcGrantMembersOf string
+	svcGrantMembersOf []string
 	svcGrantAccess    string
 )
 
@@ -65,12 +65,17 @@ var svcGrantCmd = &cobra.Command{
 		"identity loses access — and each is inserted ABOVE the first rule that would\n" +
 		"otherwise shadow it (no manual index needed). Re-running is a no-op.\n\n" +
 		"--members-of narrows rule 2 to that group's members (least privilege; needs\n" +
-		"the memberof overlay). It fits read and modify; a brand-new entry cannot\n" +
-		"match a memberOf filter before it exists, so creating entries needs an\n" +
-		"unfiltered grant.",
+		"the memberof overlay). Repeat it for several groups — they become one OR\n" +
+		"filter in the SAME rule, so `--members-of a --members-of b` means \"a member\n" +
+		"of a or b\". The order you pass them in does not matter: the filter is\n" +
+		"canonical, so re-running the same grant stays a no-op.\n\n" +
+		"It fits read and modify; a brand-new entry cannot match a memberOf filter\n" +
+		"before it exists, so creating entries needs an unfiltered grant.",
 	Args: cobra.ExactArgs(1),
 	Example: "  # read-only: the app may list only the members of a group\n" +
 		"  openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins\n" +
+		"  # ...or of several groups (one OR filter, one rule)\n" +
+		"  openldap-cli svc grant app --tree ou=users,dc=example,dc=org --members-of admins --members-of ops\n" +
 		"  # read-only: the app may list every group\n" +
 		"  openldap-cli svc grant app --tree ou=groups,dc=example,dc=org\n" +
 		"  # read-write: the app may also create/modify/delete entries in the tree\n" +
@@ -92,8 +97,16 @@ var svcGrantCmd = &cobra.Command{
 		defer cli.Close()
 		sa := svcDN(cli, name)
 
-		filter := ""
-		if g := strings.TrimSpace(svcGrantMembersOf); g != "" {
+		// --members-of is repeatable: several groups become one OR filter, so
+		// "a member of devs or ops" is a single rule rather than a shape the
+		// command cannot express (which used to push people to an unfiltered
+		// grant — far wider than they asked for).
+		var groupDNs []string
+		for _, g := range svcGrantMembersOf {
+			g = strings.TrimSpace(g)
+			if g == "" {
+				continue
+			}
 			if !strings.Contains(g, "=") { // a bare name -> resolve to its DN
 				e, ferr := cli.FindGroup(g, []string{"cn"})
 				if ferr != nil {
@@ -101,8 +114,9 @@ var svcGrantCmd = &cobra.Command{
 				}
 				g = e.DN
 			}
-			filter = "(memberOf=" + g + ")"
+			groupDNs = append(groupDNs, g)
 		}
+		filter := acl.MemberOfFilter(groupDNs)
 
 		cc, err := connectConfig()
 		if err != nil {
@@ -518,7 +532,8 @@ func init() {
 	svcPasswdCmd.Flags().StringVar(&svcPasswdValue, "password", "", "password (default: generate a 32-char one)")
 
 	svcGrantCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
-	svcGrantCmd.Flags().StringVar(&svcGrantMembersOf, "members-of", "", "only entries that are members of this group (name or DN) — least privilege")
+	svcGrantCmd.Flags().StringArrayVar(&svcGrantMembersOf, "members-of", nil,
+		"only entries that are members of this group (name or DN); repeat for several — least privilege")
 	svcGrantCmd.Flags().StringVar(&svcGrantAccess, "access", "read", "access level on the entries: read|search|write|manage (the container follows: search, or write for write|manage)")
 	svcRevokeCmd.Flags().StringVar(&svcRevokeTree, "tree", "", "only the rules protecting this subtree (default: every clause the account has)")
 	svcCmd.AddCommand(svcAddCmd, svcPasswdCmd, svcDeleteCmd, svcInfoCmd, svcGrantCmd, svcRevokeCmd)
