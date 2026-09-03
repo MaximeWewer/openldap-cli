@@ -26,7 +26,7 @@ type userSelectors struct {
 func (s *userSelectors) bind(c *cobra.Command, withLocked bool) {
 	f := c.Flags()
 	f.StringVar(&s.group, "group", "", "target all members of this group")
-	f.StringVar(&s.filter, "filter", "", "target users matching this LDAP filter")
+	f.StringVar(&s.filter, "filter", "", "target users matching this LDAP filter (ANDed with objectClass=inetOrgPerson)")
 	if withLocked {
 		f.BoolVar(&s.allLocked, "all-locked", false, "target all ppolicy-locked users")
 	}
@@ -74,7 +74,14 @@ func resolveUserTargets(cli *ldapx.Client, logins []string, sel *userSelectors) 
 		}
 	}
 	if sel.filter != "" {
-		es, serr := searchAll(cli, cli.UserBase(), sel.filter, attrs)
+		// AND the objectClass in, the way --group already does: these are the
+		// `users` commands, and a bare (objectClass=*) would otherwise hand
+		// `users delete` the OUs and groups living under the user base too
+		f := sel.filter
+		if !strings.HasPrefix(f, "(") || !strings.HasSuffix(f, ")") {
+			return nil, nil, fmt.Errorf("--filter %q is not a parenthesized LDAP filter", sel.filter)
+		}
+		es, serr := searchAll(cli, cli.UserBase(), "(&(objectClass=inetOrgPerson)"+f+")", attrs)
 		if serr != nil {
 			return nil, nil, fmt.Errorf("filter search: %w", serr)
 		}
