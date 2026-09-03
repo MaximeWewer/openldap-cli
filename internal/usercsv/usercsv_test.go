@@ -114,3 +114,20 @@ func TestPositionalIsTheOldFormat(t *testing.T) {
 		t.Errorf("sn = %q, want empty", got)
 	}
 }
+
+func TestIsHashed(t *testing.T) {
+	// a value with no {SCHEME} is cleartext, and slapd would store it verbatim
+	for v, want := range map[string]bool{
+		"{SSHA}xLBnRnMLCoOOZW5Zj/PIQVJ1Hgk=": true,
+		"{ARGON2}$argon2id$v=19$m=65536":     true,
+		"{CRYPT}$6$rounds=5000$x":            true,
+		"hunter2":                            false,
+		"":                                   false,
+		"not{SSHA}atTheStart":                false,
+		"{}empty":                            false,
+	} {
+		if got := IsHashed(v); got != want {
+			t.Errorf("IsHashed(%q) = %v, want %v", v, got, want)
+		}
+	}
+}

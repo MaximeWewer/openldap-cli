@@ -31,7 +31,9 @@ var userImportCmd = &cobra.Command{
 		"Without a header, the columns are positional: login[,group][,mail].\n" +
 		"A header is a first row whose first cell is login/uid/user/username.\n\n" +
 		"Blank lines and lines starting with # are skipped. An exported\n" +
-		"userPassword is a hash and is stored as one.",
+		"userPassword is a hash and is stored as one; a CLEARTEXT userPassword is\n" +
+		"sent through Password Modify instead, so the server hashes it rather than\n" +
+		"storing what the file said.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := loadConfig()
@@ -106,13 +108,27 @@ var userImportCmd = &cobra.Command{
 
 			dn := u.DN(cfg.UserOU, cfg.BaseDN)
 			// an exported userPassword is already hashed; slapd stores it as-is,
-			// which is what makes `export --with-hash` a usable migration
-			if err := cli.AddEntry(dn, u.AttributeMap(usercsv.Cell(row, cols, usercsv.Password), nil)); err != nil {
+			// which is what makes `export --with-hash` a usable migration.
+			// A CLEARTEXT value would be stored just as literally, so it goes
+			// through Password Modify after the add instead and the server
+			// hashes it - the column is usable either way, but never in clear.
+			pw := usercsv.Cell(row, cols, usercsv.Password)
+			hashed, clear := pw, ""
+			if pw != "" && !usercsv.IsHashed(pw) {
+				hashed, clear = "", pw
+			}
+			if err := cli.AddEntry(dn, u.AttributeMap(hashed, nil)); err != nil {
 				res.Failed = append(res.Failed, importIssue{login, err.Error()})
 				if userImportStopOnError {
 					return fmt.Errorf("create %s: %w", login, err)
 				}
 				continue
+			}
+			if clear != "" {
+				if _, perr := cli.SetPassword(dn, clear); perr != nil {
+					res.Warnings = append(res.Warnings, importIssue{login,
+						"created, but the cleartext userPassword was not set: " + perr.Error()})
+				}
 			}
 			res.Created = append(res.Created, dn)
 

@@ -14,7 +14,10 @@
 // files written for the old format.
 package usercsv
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Fields an import understands. Everything not named is derived from the login.
 const (
@@ -93,3 +96,14 @@ func Cell(row []string, cols map[string]int, field string) string {
 	}
 	return strings.TrimSpace(row[i])
 }
+
+// hashPrefix matches the {SCHEME} an already-hashed userPassword carries.
+var hashPrefix = regexp.MustCompile(`^\{[A-Za-z0-9-]+\}`)
+
+// IsHashed reports whether a userPassword value is already hashed.
+//
+// It matters because slapd stores an add's userPassword verbatim: a cleartext
+// value in the CSV lands in the directory in cleartext, readable by anyone the
+// ACLs let read the attribute. Only ppolicy's olcPPolicyHashCleartext would
+// hash it, and it is off by default.
+func IsHashed(v string) bool { return hashPrefix.MatchString(v) }
