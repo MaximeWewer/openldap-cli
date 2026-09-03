@@ -283,11 +283,7 @@ func ShadowIndex(values []string, o InjectOpts) int {
 	for _, v := range values {
 		idx, body := SplitIndexed(v)
 		body = strings.TrimSpace(body)
-		s := body
-		if i := strings.Index(body, " by "); i >= 0 {
-			s = body[:i]
-		}
-		rules = append(rules, r{idx, parseSelector(s), hasBreak(body)})
+		rules = append(rules, r{idx, ruleSelector(body), hasBreak(body)})
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
 	for _, x := range rules {
@@ -315,11 +311,7 @@ func Lint(values []string) []Finding {
 	for _, v := range values {
 		idx, body := SplitIndexed(v)
 		body = strings.TrimSpace(body)
-		sel := body
-		if i := strings.Index(body, " by "); i >= 0 {
-			sel = body[:i]
-		}
-		rules = append(rules, rule{idx: idx, body: body, sel: parseSelector(sel), brk: hasBreak(body)})
+		rules = append(rules, rule{idx: idx, body: body, sel: ruleSelector(body), brk: hasBreak(body)})
 	}
 	sort.Slice(rules, func(i, j int) bool { return rules[i].idx < rules[j].idx })
 

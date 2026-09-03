@@ -446,3 +446,16 @@ func TestRuleSelectorKeepsADNContainingBy(t *testing.T) {
 		t.Error("Inject added a second rule for a target the first already protects")
 	}
 }
+
+func TestShadowIndexSeesADNContainingBy(t *testing.T) {
+	// ShadowIndex decides where a new rule is placed; parsing the selector with
+	// a plain Index cut the target DN at the " by " inside its quotes, so the
+	// shadowing rule went unrecognized and the grant landed below it, dead
+	broad := `{0}to dn.subtree="ou=stand by me,dc=e" by * read`
+	o := InjectOpts{Target: "cn=x,ou=stand by me,dc=e", Scope: "subtree",
+		Who: DNWho("cn=svc,dc=e"), Access: "read"}
+
+	if got := ShadowIndex([]string{broad}, o); got != 0 {
+		t.Errorf("ShadowIndex = %d, want 0 (the broad rule shadows the target)", got)
+	}
+}
