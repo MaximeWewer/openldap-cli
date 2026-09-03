@@ -76,3 +76,52 @@ func TestParseMultiValue(t *testing.T) {
 		t.Errorf("member = %v, want 2 values", got)
 	}
 }
+
+func TestRoundTripPreservesEdgeValues(t *testing.T) {
+	// a trailing space used to be written plain and trimmed back off on read,
+	// so backup -> restore silently dropped it
+	for _, v := range []string{"admin ", " lead", "a  b", "a:b", "plain", "é", "x\ty"} {
+		var b bytes.Buffer
+		Write(&b, []Entry{{DN: "cn=x,dc=e", Attrs: []Attr{{Name: "cn", Values: []string{v}}}}})
+
+		got, err := Parse(bytes.NewReader(b.Bytes()))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", v, err)
+		}
+		if len(got) != 1 || len(got[0].Attrs) != 1 {
+			t.Fatalf("value %q: got %d entries", v, len(got))
+		}
+		if back := got[0].Attrs[0].Values[0]; back != v {
+			t.Errorf("value %q wrote %q and read back %q", v, b.String(), back)
+		}
+	}
+}
+
+func TestParseRejectsNonAddChangetype(t *testing.T) {
+	// restore re-adds every record, so a delete record would be inverted
+	in := "dn: cn=x,dc=e\nchangetype: delete\n"
+	if _, err := Parse(strings.NewReader(in)); err == nil {
+		t.Fatal("Parse accepted changetype: delete; want an error")
+	}
+}
+
+func TestParseRejectsURLReference(t *testing.T) {
+	in := "dn: cn=x,dc=e\njpegPhoto:< file:///etc/passwd\n"
+	if _, err := Parse(strings.NewReader(in)); err == nil {
+		t.Fatal("Parse accepted a URL-referenced value; want an error")
+	}
+}
+
+func TestParseFoldsAttributeNameCase(t *testing.T) {
+	in := "dn: cn=x,dc=e\ncn: a\nCN: b\n"
+	got, err := Parse(strings.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got[0].Attrs) != 1 {
+		t.Fatalf("cn and CN gave %d attributes, want 1", len(got[0].Attrs))
+	}
+	if len(got[0].Attrs[0].Values) != 2 {
+		t.Errorf("values = %v, want both", got[0].Attrs[0].Values)
+	}
+}

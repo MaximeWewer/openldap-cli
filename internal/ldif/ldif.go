@@ -23,11 +23,17 @@ type Entry struct {
 }
 
 // needsBase64 reports whether an LDIF value must be base64-encoded.
+// needsBase64 reports whether RFC 2849 forbids writing v as a plain value.
+// A trailing space counts: readers strip it, so `cn: admin ` comes back as
+// "admin" and a backup/restore round-trip silently loses the character.
 func needsBase64(v string) bool {
 	if v == "" {
 		return false
 	}
 	if v[0] == ' ' || v[0] == ':' || v[0] == '<' {
+		return true
+	}
+	if v[len(v)-1] == ' ' {
 		return true
 	}
 	for i := range len(v) {
@@ -95,22 +101,34 @@ func Parse(r io.Reader) ([]Entry, error) {
 	var entries []Entry
 	for _, rec := range records {
 		var e Entry
-		idx := map[string]int{} // attr name -> position in e.Attrs
+		idx := map[string]int{} // canonical attr name -> position in e.Attrs
 		for _, l := range rec {
 			name, val, ok := splitLine(l)
 			if !ok {
 				continue
 			}
-			switch strings.ToLower(name) {
+			// a value given as a URL reference names a file the writer expected
+			// the reader to fetch; storing the reference text would put
+			// "< file://..." in the directory, so refuse rather than corrupt it
+			if isURLRef(l) {
+				return nil, fmt.Errorf("%s: URL-referenced values (%s:<) are not supported", e.DN, name)
+			}
+			switch key := strings.ToLower(name); key {
 			case "dn":
 				e.DN = val
 			case "changetype":
-				// adds only
+				// every caller re-ADDS what it reads, so a modify or delete
+				// record would be applied as its own opposite
+				if !strings.EqualFold(strings.TrimSpace(val), "add") {
+					return nil, fmt.Errorf("%s: changetype %q is not supported, only add", e.DN, val)
+				}
 			default:
-				if i, seen := idx[name]; seen {
+				// attribute names are case-insensitive, so "CN" and "cn" are one
+				// attribute; keeping them apart makes the add fail on a duplicate
+				if i, seen := idx[key]; seen {
 					e.Attrs[i].Values = append(e.Attrs[i].Values, val)
 				} else {
-					idx[name] = len(e.Attrs)
+					idx[key] = len(e.Attrs)
 					e.Attrs = append(e.Attrs, Attr{Name: name, Values: []string{val}})
 				}
 			}
@@ -124,6 +142,12 @@ func Parse(r io.Reader) ([]Entry, error) {
 }
 
 // splitLine parses "name: value" / "name:: base64" into (name, decoded, ok).
+// isURLRef reports whether l uses the "attr:< url" form.
+func isURLRef(l string) bool {
+	i := strings.IndexByte(l, ':')
+	return i > 0 && strings.HasPrefix(strings.TrimLeft(l[i+1:], " "), "<")
+}
+
 func splitLine(l string) (string, string, bool) {
 	i := strings.IndexByte(l, ':')
 	if i <= 0 {
@@ -138,5 +162,7 @@ func splitLine(l string) (string, string, bool) {
 		}
 		return name, string(dec), true
 	}
-	return name, strings.TrimSpace(rest), true
+	// only the single space after the colon is the separator: RFC 2849 keeps
+	// everything past it, so trimming the whole run would eat real characters
+	return name, strings.TrimPrefix(rest, " "), true
 }
