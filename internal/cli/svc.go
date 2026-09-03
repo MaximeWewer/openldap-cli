@@ -129,8 +129,23 @@ var svcGrantCmd = &cobra.Command{
 			{Target: tree, Scope: "base", Who: who, Access: containerAccess(svcGrantAccess)},
 			{Target: tree, Scope: "subtree", Filter: filter, Who: who, Access: svcGrantAccess},
 		}
+
+		// a grant is two rules - reach the container, then read what is in it -
+		// and one without the other is not a working grant. They cannot go in
+		// one Modify (the second is placed relative to what the first left), so
+		// put the rules back as they were if the second step fails.
+		start, err := cc.ReadEntry(svcACLDB, []string{"olcAccess"})
+		if err != nil {
+			return err
+		}
+		before := start.GetAll("olcAccess")
+		bodies := make([]string, len(before))
+		for i, v := range before {
+			_, bodies[i] = acl.SplitIndexed(v)
+		}
+
 		var rules []string
-		for _, step := range steps {
+		for i, step := range steps {
 			e, rerr := cc.ReadEntry(svcACLDB, []string{"olcAccess"})
 			if rerr != nil {
 				return rerr
@@ -139,6 +154,12 @@ var svcGrantCmd = &cobra.Command{
 			step.At = acl.ShadowIndex(e.GetAll("olcAccess"), step)
 			rule, _, ierr := cc.InjectAccess(svcACLDB, step)
 			if ierr != nil {
+				if i > 0 {
+					if uerr := cc.ReplaceAccess(svcACLDB, e.GetAll("olcAccess"), bodies); uerr != nil {
+						return fmt.Errorf("grant on %s: %w\n  AND the half-applied grant could not be undone: %w\n"+
+							"  run `svc revoke %s --tree %s` to clean it up", svcACLDB, ierr, uerr, name, tree)
+					}
+				}
 				return fmt.Errorf("grant on %s: %w", svcACLDB, ierr)
 			}
 			if rule == "" {
