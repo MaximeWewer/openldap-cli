@@ -50,6 +50,11 @@ func (o *Writer) Emit(v Renderable) error {
 	case JSON:
 		enc := json.NewEncoder(o.w)
 		enc.SetIndent("", "  ")
+		// results go to a pipe, never into an HTML page, and directory data is
+		// full of the three characters this escapes: an RFC 4514 DN quotes `<`
+		// and `>`, olcAccess rules and descriptions carry `&`. Escaping them
+		// turned a readable DN into cn=a\u003cb\u003ec for no one's benefit.
+		enc.SetEscapeHTML(false)
 		return enc.Encode(v)
 	case YAML:
 		b, err := yaml.Marshal(v)

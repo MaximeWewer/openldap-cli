@@ -50,3 +50,36 @@ func TestUnknownFormat(t *testing.T) {
 		t.Error("expected error for unknown format")
 	}
 }
+
+func TestJSONDoesNotEscapeHTMLOrReorderKeys(t *testing.T) {
+	// directory data is full of < > & (an RFC 4514 DN escapes < and >, ACL
+	// rules carry &), and results go to a pipe, not an HTML page
+	var b bytes.Buffer
+	w, err := New("json", &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Emit(entryish{DN: `cn=a\<b\>c,dc=e`, Attrs: map[string][]string{
+		"z": {"last"}, "a": {"R&D <team>"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	got := b.String()
+	if strings.Contains(got, `\u003c`) || strings.Contains(got, `\u0026`) {
+		t.Errorf("JSON still escapes HTML characters:\n%s", got)
+	}
+	if !strings.Contains(got, `cn=a\\<b\\>c,dc=e`) {
+		t.Errorf("DN not rendered readably:\n%s", got)
+	}
+	// map keys stay sorted, so two runs of a command diff cleanly
+	if strings.Index(got, `"a"`) > strings.Index(got, `"z"`) {
+		t.Errorf("map keys are not sorted:\n%s", got)
+	}
+}
+
+type entryish struct {
+	DN    string              `json:"dn" yaml:"dn"`
+	Attrs map[string][]string `json:"attrs" yaml:"attrs"`
+}
+
+func (e entryish) Text() string { return e.DN }

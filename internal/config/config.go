@@ -236,7 +236,8 @@ func envFile(dst *string, key string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", key, err)
 	}
-	*dst = strings.TrimRight(strings.SplitN(string(raw), "\n", 2)[0], "\r")
+	first, _, _ := strings.Cut(string(raw), "\n")
+	*dst = strings.TrimRight(first, "\r")
 	return nil
 }
 
