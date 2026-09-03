@@ -6,7 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
+	"time"
 
 	"github.com/go-ldap/ldap/v3"
 
@@ -14,6 +16,11 @@ import (
 )
 
 // Client is a bound LDAP connection plus the profile it was opened with.
+// DefaultTimeout caps a dial and every LDAP operation when the profile does not
+// set one. Generous enough for a paged dump of a large directory, short enough
+// that an unresponsive server fails rather than hangs.
+const DefaultTimeout = 2 * time.Minute
+
 type Client struct {
 	conn *ldap.Conn
 	cfg  *config.Profile
@@ -32,10 +39,21 @@ func Connect(p *config.Profile) (*Client, error) {
 		InsecureSkipVerify: p.Insecure, // #nosec G402 -- opt-in dev flag (insecure: true / LDAP_INSECURE)
 	}
 
-	conn, err := ldap.DialURL(p.URL, ldap.DialWithTLSConfig(tlsCfg))
+	// bound the dial and every later operation: without this a server that
+	// accepts the connection and then goes quiet hangs the CLI indefinitely,
+	// which in a cron job or a CI step means a stuck process, not a failure
+	timeout := p.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	conn, err := ldap.DialURL(p.URL,
+		ldap.DialWithTLSConfig(tlsCfg),
+		ldap.DialWithDialer(&net.Dialer{Timeout: timeout}),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", p.URL, err)
 	}
+	conn.SetTimeout(timeout)
 	if p.StartTLS {
 		if err := conn.StartTLS(tlsCfg); err != nil {
 			_ = conn.Close()

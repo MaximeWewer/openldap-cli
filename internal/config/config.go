@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 )
@@ -36,6 +37,9 @@ type Profile struct {
 	// or a TLS client cert). bind_dn/bind_pw are then ignored. Typical use: run
 	// as root against ldapi:/// to manage cn=config with no stored password.
 	SASLExternal bool `yaml:"sasl_external"`
+
+	// Timeout caps a single LDAP operation. 0 uses DefaultTimeout.
+	Timeout time.Duration `yaml:"timeout"`
 
 	// Second bind for cn=config writes (ACL injection, overlays). Usually the
 	// config rootDN, e.g. cn=adminconfig,cn=config.
@@ -177,6 +181,13 @@ func applyEnv(p *Profile) error {
 	envStr(&p.GroupOU, "LDAP_GROUP_OU")
 	envStr(&p.PolicyOU, "LDAP_POLICY_OU")
 	envStr(&p.MailDomain, "LDAP_MAIL_DOMAIN")
+	if v, ok := os.LookupEnv("LDAP_TIMEOUT"); ok {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("LDAP_TIMEOUT=%q is not a duration (e.g. 30s, 2m)", v)
+		}
+		p.Timeout = d
+	}
 	envStr(&p.ConfigBindDN, "LDAP_CONFIG_BIND_DN")
 	envStr(&p.ConfigBindPW, "LDAP_CONFIG_BIND_PW")
 	// the _FILE forms let a container read the secret off a mounted file rather
