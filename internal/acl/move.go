@@ -34,11 +34,10 @@ func (m Impact) Empty() bool { return len(m.Lost) == 0 && len(m.Dead) == 0 }
 
 // ruleSelector returns the parsed `to …` part of a rule body.
 func ruleSelector(body string) selector {
-	s := body
-	if before, _, ok := strings.Cut(body, " by "); ok {
-		s = before
-	}
-	return parseSelector(s)
+	// splitByClauses, not a plain Cut: the target DN is quoted, and a " by "
+	// inside it (`to dn.subtree="ou=stand by me,dc=e"`) would otherwise cut the
+	// selector in half and compare against a DN nobody wrote
+	return parseSelector(splitByClauses(body)[0])
 }
 
 // firstDecider returns the body of the earliest rule that matches everything sel

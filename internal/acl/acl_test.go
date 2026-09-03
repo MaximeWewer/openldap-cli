@@ -428,3 +428,21 @@ func TestInjectIsIdempotentAcrossWhitespace(t *testing.T) {
 		t.Errorf("Inject duplicated an existing grant: %+v (appended=%v)", edit, appended)
 	}
 }
+
+func TestRuleSelectorKeepsADNContainingBy(t *testing.T) {
+	// the target DN is quoted, so a " by " inside it is not a clause separator;
+	// cutting on the first one compared the rule against a truncated DN and so
+	// never recognized the rule protecting that tree
+	who := DNWho("cn=svc,dc=e")
+	body := `to dn.subtree="ou=stand by me,dc=e" by ` + who + ` read`
+
+	if got := ruleSelector(body).dn; got != "ou=stand by me,dc=e" {
+		t.Fatalf("ruleSelector dn = %q, want the whole DN", got)
+	}
+	// and the grant lands in that rule rather than creating a shadowed second one
+	o := InjectOpts{Target: "ou=stand by me,dc=e", Scope: "subtree",
+		Who: DNWho("cn=other,dc=e"), Access: "read"}
+	if _, appended := Inject([]string{"{0}" + body}, o); appended {
+		t.Error("Inject added a second rule for a target the first already protects")
+	}
+}
