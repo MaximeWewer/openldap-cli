@@ -81,7 +81,9 @@ func Load(path, profile string) (*Profile, error) {
 	}
 
 	p := f.Profiles[profile] // zero value if absent; env may fill it
-	applyEnv(&p)
+	if err := applyEnv(&p); err != nil {
+		return nil, err
+	}
 
 	if p.URL == "" {
 		return nil, fmt.Errorf("no LDAP url for profile %q (set it in %s or LDAP_URL)", profile, path)
@@ -165,7 +167,7 @@ func SetDefault(path, name string) error {
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), info.Mode()) // #nosec G703,G304 -- writing the user's own config file
 }
 
-func applyEnv(p *Profile) {
+func applyEnv(p *Profile) error {
 	envStr(&p.URL, "LDAP_URL")
 	envStr(&p.BaseDN, "LDAP_BASE_DN")
 	envStr(&p.BindDN, "LDAP_BIND_DN")
@@ -176,9 +178,19 @@ func applyEnv(p *Profile) {
 	envStr(&p.MailDomain, "LDAP_MAIL_DOMAIN")
 	envStr(&p.ConfigBindDN, "LDAP_CONFIG_BIND_DN")
 	envStr(&p.ConfigBindPW, "LDAP_CONFIG_BIND_PW")
-	envBool(&p.StartTLS, "LDAP_START_TLS")
-	envBool(&p.Insecure, "LDAP_INSECURE")
-	envBool(&p.SASLExternal, "LDAP_SASL_EXTERNAL")
+	for _, b := range []struct {
+		dst *bool
+		key string
+	}{
+		{&p.StartTLS, "LDAP_START_TLS"},
+		{&p.Insecure, "LDAP_INSECURE"},
+		{&p.SASLExternal, "LDAP_SASL_EXTERNAL"},
+	} {
+		if err := envBool(b.dst, b.key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func envStr(dst *string, key string) {
@@ -187,10 +199,18 @@ func envStr(dst *string, key string) {
 	}
 }
 
-func envBool(dst *bool, key string) {
-	if v, ok := os.LookupEnv(key); ok {
-		if b, err := strconv.ParseBool(v); err == nil {
-			*dst = b
-		}
+// envBool refuses what it cannot parse rather than ignoring it: silently
+// dropping LDAP_START_TLS=yes downgrades the connection to a cleartext bind,
+// and silently dropping LDAP_INSECURE=no would do the reverse.
+func envBool(dst *bool, key string) error {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return nil
 	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return fmt.Errorf("%s=%q is not a boolean (use true/false, 1/0)", key, v)
+	}
+	*dst = b
+	return nil
 }

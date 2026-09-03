@@ -120,3 +120,29 @@ func TestSetDefaultUnknown(t *testing.T) {
 		t.Error("expected error for unknown profile")
 	}
 }
+
+func TestEnvBoolRejectsNonBoolean(t *testing.T) {
+	// a typo in LDAP_START_TLS used to be swallowed, leaving the bind in
+	// cleartext while the operator believed TLS was on
+	t.Setenv("LDAP_URL", "ldap://localhost:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_START_TLS", "yes")
+
+	if _, err := Load(filepath.Join(t.TempDir(), "absent.yaml"), ""); err == nil {
+		t.Fatal("Load accepted LDAP_START_TLS=yes; want an error")
+	}
+}
+
+func TestEnvBoolAcceptsBoolean(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://localhost:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_START_TLS", "true")
+
+	p, err := Load(filepath.Join(t.TempDir(), "absent.yaml"), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !p.StartTLS {
+		t.Error("StartTLS = false, want true")
+	}
+}
