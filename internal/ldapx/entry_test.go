@@ -62,3 +62,27 @@ func TestIsNoSuchAttribute(t *testing.T) {
 		t.Error("expected false for nil")
 	}
 }
+
+func TestEntryLookupIsCaseInsensitive(t *testing.T) {
+	// the server picks the spelling it answers with; callers ask in whatever
+	// case reads best, and both have to find the same values
+	e := newEntry(&ldap.Entry{
+		DN: "cn=x,dc=e",
+		Attributes: []*ldap.EntryAttribute{
+			{Name: "objectclass", Values: []string{"top", "person"}},
+			{Name: "CN", Values: []string{"x"}},
+		},
+	})
+	for _, name := range []string{"objectClass", "objectclass", "OBJECTCLASS"} {
+		if got := e.GetAll(name); len(got) != 2 {
+			t.Errorf("GetAll(%q) = %v, want 2 values", name, got)
+		}
+	}
+	if got := e.Get("cn"); got != "x" {
+		t.Errorf(`Get("cn") = %q, want "x"`, got)
+	}
+	// Names keeps the server's own spelling, so output shows what it sent
+	if names := e.Names(); names[0] != "objectclass" || names[1] != "CN" {
+		t.Errorf("Names() = %v, want the server spelling", names)
+	}
+}

@@ -1,20 +1,28 @@
 package ldapx
 
-import "github.com/go-ldap/ldap/v3"
+import (
+	"strings"
+
+	"github.com/go-ldap/ldap/v3"
+)
 
 // Entry is a directory entry, decoupled from the underlying LDAP library so
 // callers never import go-ldap.
+//
+// Attribute lookups are case-insensitive, as LDAP attribute descriptions are: a
+// server may answer "objectclass" where the request said "objectClass", and an
+// exact-match map would then find nothing for a value that is right there.
 type Entry struct {
 	DN    string
-	names []string
-	attrs map[string][]string
+	names []string            // as the server spelled them, in response order
+	attrs map[string][]string // keyed by lowercase name
 }
 
 func newEntry(e *ldap.Entry) *Entry {
 	out := &Entry{DN: e.DN, attrs: make(map[string][]string, len(e.Attributes))}
 	for _, a := range e.Attributes {
 		out.names = append(out.names, a.Name)
-		out.attrs[a.Name] = a.Values
+		out.attrs[strings.ToLower(a.Name)] = a.Values
 	}
 	return out
 }
@@ -29,14 +37,14 @@ func newEntries(es []*ldap.Entry) []*Entry {
 
 // Get returns the first value of name, or "".
 func (e *Entry) Get(name string) string {
-	if v := e.attrs[name]; len(v) > 0 {
+	if v := e.attrs[strings.ToLower(name)]; len(v) > 0 {
 		return v[0]
 	}
 	return ""
 }
 
 // GetAll returns all values of name.
-func (e *Entry) GetAll(name string) []string { return e.attrs[name] }
+func (e *Entry) GetAll(name string) []string { return e.attrs[strings.ToLower(name)] }
 
 // Names returns the attribute names in server order.
 func (e *Entry) Names() []string { return e.names }
