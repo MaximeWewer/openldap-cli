@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 
+	dnpkg "github.com/MaximeWewer/openldap-cli/internal/dn"
 	"github.com/MaximeWewer/openldap-cli/internal/humanize"
 	"github.com/MaximeWewer/openldap-cli/internal/ldapx"
 	"github.com/MaximeWewer/openldap-cli/internal/ldif"
@@ -99,6 +102,12 @@ var backupRestoreCmd = &cobra.Command{
 		}
 		defer cli.Close()
 
+		// shallowest DN first: slapd refuses an entry whose parent does not
+		// exist yet, and nothing guarantees the dump listed them in that order
+		sort.SliceStable(entries, func(i, j int) bool {
+			return dnDepth(entries[i].DN) < dnDepth(entries[j].DN)
+		})
+
 		var res importResult
 		for _, e := range entries {
 			attrs := map[string][]string{}
@@ -137,37 +146,84 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 		return fmt.Errorf("dump %s: %w", base, err)
 	}
 
-	// 0600, not the 0666&umask of os.Create: a data dump taken as the rootDN
-	// carries every userPassword hash in the directory
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- destination chosen by the operator
+	size, err := writeDump(path, toLDIF(entries))
 	if err != nil {
 		return err
-	}
-	var w io.Writer = f
-	var gz *gzip.Writer
-	if strings.HasSuffix(path, ".gz") {
-		gz = gzip.NewWriter(f)
-		w = gz
-	}
-	ldif.Write(w, toLDIF(entries))
-	if gz != nil {
-		if cerr := gz.Close(); cerr != nil {
-			_ = f.Close()
-			return cerr
-		}
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	var size int64
-	if fi, statErr := os.Stat(path); statErr == nil {
-		size = fi.Size()
 	}
 	log.Debug().Str("file", path).Int("entries", len(entries)).Int64("bytes", size).Msg("backup written")
 	// the dump went through the profile's bind, so it carries only what that
 	// identity may read — say whether that is the whole database or a subset
 	audit := auditBackup(cli, base, len(entries))
 	return out.Emit(dumpResult{File: path, Base: base, Entries: len(entries), Bytes: size, Audit: audit})
+}
+
+// dnDepth counts a DN's RDN components, honoring escaped commas.
+func dnDepth(d string) int {
+	n := 0
+	for rest := d; rest != ""; n++ {
+		_, rest = dnpkg.Split(rest)
+	}
+	return n
+}
+
+// writeDump writes the LDIF to a sibling temp file and renames it over path
+// only once every byte is on disk. A dump is a backup: truncating the previous
+// one up front means a failure half way through destroys the good copy and
+// leaves a partial file wearing its name.
+//
+// The file is 0600, not the 0666&umask of os.Create - a data dump taken as the
+// rootDN carries every userPassword hash in the directory.
+func writeDump(path string, entries []ldif.Entry) (size int64, err error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp*")
+	if err != nil {
+		return 0, err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err = tmp.Chmod(0o600); err != nil {
+		return 0, err
+	}
+
+	bw := bufio.NewWriter(tmp)
+	var w io.Writer = bw
+	var gz *gzip.Writer
+	if strings.HasSuffix(path, ".gz") {
+		gz = gzip.NewWriter(bw)
+		w = gz
+	}
+	if err = ldif.Write(w, entries); err != nil {
+		return 0, fmt.Errorf("write %s: %w", path, err)
+	}
+	if gz != nil {
+		if err = gz.Close(); err != nil {
+			return 0, fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	if err = bw.Flush(); err != nil {
+		return 0, fmt.Errorf("write %s: %w", path, err)
+	}
+	// fsync before the rename, or a crash can leave the new name pointing at
+	// a file whose contents never reached the disk
+	if err = tmp.Sync(); err != nil {
+		return 0, fmt.Errorf("sync %s: %w", path, err)
+	}
+	fi, err := tmp.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if err = tmp.Close(); err != nil {
+		return 0, err
+	}
+	if err = os.Rename(tmpName, path); err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
 }
 
 // readLDIF reads entries from a plain or gzipped LDIF file (auto-detected by

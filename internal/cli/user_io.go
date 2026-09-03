@@ -216,8 +216,7 @@ var userExportCmd = &cobra.Command{
 			if serr != nil {
 				return fmt.Errorf("search users: %w", serr)
 			}
-			ldif.Write(os.Stdout, toLDIF(entries))
-			return nil
+			return ldif.Write(os.Stdout, toLDIF(entries))
 		}
 
 		cols := []string{"uid", "cn", "sn", "givenName", "displayName", "mail"}

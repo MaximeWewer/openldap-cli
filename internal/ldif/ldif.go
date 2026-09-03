@@ -44,25 +44,37 @@ func needsBase64(v string) bool {
 	return false
 }
 
-func line(w io.Writer, name, val string) {
+func line(w io.Writer, name, val string) error {
+	var err error
 	if needsBase64(val) {
-		fmt.Fprintf(w, "%s:: %s\n", name, base64.StdEncoding.EncodeToString([]byte(val)))
+		_, err = fmt.Fprintf(w, "%s:: %s\n", name, base64.StdEncoding.EncodeToString([]byte(val)))
 	} else {
-		fmt.Fprintf(w, "%s: %s\n", name, val)
+		_, err = fmt.Fprintf(w, "%s: %s\n", name, val)
 	}
+	return err
 }
 
-// Write emits entries as LDIF (dn + attributes), blank-line separated.
-func Write(w io.Writer, entries []Entry) {
+// Write emits entries as LDIF (dn + attributes), blank-line separated. It
+// reports the first write error rather than swallowing it: a dump that hits a
+// full disk half way through is a truncated backup, and calling that a success
+// is worse than not taking it.
+func Write(w io.Writer, entries []Entry) error {
 	for _, e := range entries {
-		line(w, "dn", e.DN)
+		if err := line(w, "dn", e.DN); err != nil {
+			return err
+		}
 		for _, a := range e.Attrs {
 			for _, v := range a.Values {
-				line(w, a.Name, v)
+				if err := line(w, a.Name, v); err != nil {
+					return err
+				}
 			}
 		}
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // Parse reads add-style LDIF records (changetype ignored; dn separated out).
