@@ -5,6 +5,7 @@
 package ldapx_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -139,5 +140,67 @@ func TestACLRoundtripIntegration(t *testing.T) {
 		if strings.Contains(v, "ou=itest,dc=example,dc=org") {
 			t.Errorf("revoke left the rule behind: %s", v)
 		}
+	}
+}
+
+// TestReplaceAccessIsCompareAndSwap proves the two guarantees the ACL rewrites
+// rely on: a rewrite computed from stale rules is refused outright, and it is
+// refused atomically, leaving the live rules untouched.
+func TestReplaceAccessIsCompareAndSwap(t *testing.T) {
+	c, err := ldapx.Connect(&config.Profile{
+		URL: "ldap://localhost:389", BaseDN: "dc=example,dc=org",
+		BindDN: "cn=adminconfig,cn=config", BindPW: "configpassword",
+	})
+	if err != nil {
+		t.Skipf("config bind unavailable: %v", err)
+	}
+	defer c.Close()
+
+	const db = "olcDatabase={1}mdb,cn=config"
+	read := func() []string {
+		t.Helper()
+		e, rerr := c.ReadEntry(db, []string{"olcAccess"})
+		if rerr != nil {
+			t.Fatalf("read olcAccess: %v", rerr)
+		}
+		return e.GetAll("olcAccess")
+	}
+
+	before := read()
+	if len(before) < 2 {
+		t.Skipf("need at least 2 rules to exercise this, have %d", len(before))
+	}
+	bodies := make([]string, len(before))
+	for i, v := range before {
+		_, bodies[i] = acl.SplitIndexed(v)
+	}
+
+	// a rewrite that matches the live rules goes through unchanged
+	if err := c.ReplaceAccess(db, before, bodies); err != nil {
+		t.Fatalf("ReplaceAccess on current rules: %v", err)
+	}
+	if n := len(read()); n != len(before) {
+		t.Fatalf("no-op rewrite changed the rule count: %d -> %d", len(before), n)
+	}
+
+	// a rewrite computed from rules that are no longer there is refused, and
+	// nothing is applied - the lost update this guards against
+	stale := append([]string{}, read()...)
+	stale[0] = "{0}to * by * none"
+	err = c.ReplaceAccess(db, stale, bodies)
+	if !errors.Is(err, ldapx.ErrACLRaced) {
+		t.Errorf("stale rewrite: err = %v, want ErrACLRaced", err)
+	}
+	if n := len(read()); n != len(before) {
+		t.Errorf("refused rewrite was not atomic: %d rules left, want %d", n, len(before))
+	}
+
+	// an empty rule list would delete olcAccess and widen access to slapd's
+	// default, so it is refused before it ever reaches the server
+	if err := c.ReplaceAccess(db, read(), nil); err == nil {
+		t.Error("ReplaceAccess accepted an empty rule list")
+	}
+	if n := len(read()); n != len(before) {
+		t.Errorf("rule count changed after the empty-list refusal: %d, want %d", n, len(before))
 	}
 }

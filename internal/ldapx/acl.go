@@ -1,6 +1,48 @@
 package ldapx
 
-import "github.com/MaximeWewer/openldap-cli/internal/acl"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/MaximeWewer/openldap-cli/internal/acl"
+)
+
+// ErrACLRaced is returned when olcAccess changed between the read the new rule
+// list was computed from and the write that would have applied it.
+var ErrACLRaced = errors.New("olcAccess changed on the server while this edit was being computed")
+
+// replaceAccess swaps the whole olcAccess list for bodies, as a compare-and-swap:
+// one Modify that first deletes the exact values we read, then adds the new ones.
+//
+// A plain replace would be a lost update. These edits renumber every rule, so
+// they have to rewrite the list wholesale, and a rule added by a concurrent
+// operator (or a hand-run ldapmodify) between our read and our write would be
+// erased without a trace - on the server's access-control list. Naming the old
+// values in the delete makes the server refuse instead: it answers noSuchValue
+// and applies nothing, a single Modify being atomic.
+//
+// The assertion control (RFC 4528) would be the textbook way to do this, but
+// slapd's back-config rejects it: "critical control unavailable in context".
+func (c *Client) ReplaceAccess(dbDN string, seen, bodies []string) error {
+	// an empty list would DELETE olcAccess and drop the database back to
+	// slapd's built-in default, which is wider than anything being revoked
+	if len(bodies) == 0 {
+		return fmt.Errorf("refusing to leave %s with no olcAccess rule at all: the database "+
+			"would fall back to slapd's default access, which is wider than what you are "+
+			"revoking. Keep one rule, or edit olcAccess directly", dbDN)
+	}
+	mods := []Mod{
+		{Op: ModDelete, Name: "olcAccess", Values: seen},
+		{Op: ModAdd, Name: "olcAccess", Values: bodies},
+	}
+	if err := c.modify(dbDN, mods, nil); err != nil {
+		if IsNoSuchAttribute(err) {
+			return fmt.Errorf("%w: nothing was applied, re-run to work from the current rules", ErrACLRaced)
+		}
+		return err
+	}
+	return nil
+}
 
 // InjectAccess applies an acl.InjectOpts grant by editing olcAccess on dbDN (an
 // ordered attribute). Returns the resulting rule and whether a NEW rule was
@@ -30,12 +72,13 @@ func (c *Client) RenameAccessDN(dbDN, oldDN, newDN string) (rewritten int, skipp
 	if err != nil {
 		return 0, nil, err
 	}
-	bodies, rewritten, skipped := acl.RenameDN(e.GetAll("olcAccess"), oldDN, newDN)
+	seen := e.GetAll("olcAccess")
+	bodies, rewritten, skipped := acl.RenameDN(seen, oldDN, newDN)
 	if rewritten == 0 {
 		return 0, skipped, nil
 	}
-	// one replace of the whole ordered attribute: see acl.RemoveGrantee.
-	return rewritten, skipped, c.Modify(dbDN, []Mod{{Op: ModReplace, Name: "olcAccess", Values: bodies}})
+	// one rewrite of the whole ordered attribute: see acl.RemoveGrantee.
+	return rewritten, skipped, c.ReplaceAccess(dbDN, seen, bodies)
 }
 
 // RemoveAccessGrantee strips every clause referencing who (a full who-token)
@@ -67,6 +110,6 @@ func (c *Client) removeAccessGrantee(dbDN, who, target string) (removed, dropped
 	if removed == 0 {
 		return 0, 0, nil
 	}
-	// one replace of the whole ordered attribute: see acl.RemoveGrantee.
-	return removed, dropped, c.Modify(dbDN, []Mod{{Op: ModReplace, Name: "olcAccess", Values: bodies}})
+	// one rewrite of the whole ordered attribute: see acl.RemoveGrantee.
+	return removed, dropped, c.ReplaceAccess(dbDN, values, bodies)
 }

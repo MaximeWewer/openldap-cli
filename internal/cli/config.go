@@ -589,7 +589,7 @@ var configACLMoveCmd = &cobra.Command{
 	Long: "olcAccess is evaluated in index order and STOPS at the first rule whose\n" +
 		"`to` target matches, so a specific rule placed below a broad one never\n" +
 		"fires. This moves rule {from} to position {to} and renumbers the rest in\n" +
-		"one atomic replace.\n\n" +
+		"one atomic rewrite, which is refused if the rules changed meanwhile.\n\n" +
 		"Reordering decides WHICH rule answers for an entry, so the move is checked\n" +
 		"first and refused when it would silently change access: raising a rule that\n" +
 		"does not end in `by * break` above a broader one takes that rule's grantees\n" +
@@ -620,7 +620,8 @@ var configACLMoveCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		reordered, impact, err := acl.InspectMove(e.GetAll("olcAccess"), from, to)
+		seen := e.GetAll("olcAccess")
+		reordered, impact, err := acl.InspectMove(seen, from, to)
 		if err != nil {
 			return err
 		}
@@ -630,7 +631,7 @@ var configACLMoveCmd = &cobra.Command{
 		if !impact.Empty() {
 			log.Warn().Int("from", from).Int("to", to).Msg("--force: applying a move that changes access\n" + moveRefusal(from, to, impact))
 		}
-		if err := cc.Modify(dn, []ldapx.Mod{{Op: ldapx.ModReplace, Name: "olcAccess", Values: reordered}}); err != nil {
+		if err := cc.ReplaceAccess(dn, seen, reordered); err != nil {
 			return fmt.Errorf("reorder olcAccess on %s: %w", dn, err)
 		}
 		log.Debug().Str("dn", dn).Int("from", from).Int("to", to).Msg("olcAccess reordered")
