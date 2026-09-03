@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -52,6 +54,9 @@ var rootCmd = &cobra.Command{
 // text in console mode (so cobra's "Did you mean" suggestions read naturally)
 // and as structured records in json mode.
 func Execute() {
+	stop := onInterrupt()
+	defer stop()
+
 	if err := rootCmd.Execute(); err != nil {
 		err = explain(err) // add what the raw LDAP result code does not say
 		if flagLogFormat == "json" {
@@ -60,6 +65,41 @@ func Execute() {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 		}
 		os.Exit(1)
+	}
+}
+
+// onInterrupt makes Ctrl-C (and SIGTERM) undo the server-side state a command
+// has put in place before the process goes away. `defer` alone does not run on
+// a signal, and some of that state lives in cn=config - a temporary olcLimits
+// override, say - where nothing would ever clean it up afterwards.
+//
+// The second signal kills the process outright, so an operator is never stuck
+// waiting on a rollback that is itself hanging.
+func onInterrupt() (stop func()) {
+	ch := make(chan os.Signal, 2)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+
+	go func() {
+		select {
+		case <-done:
+			return
+		case sig := <-ch:
+			if ldapx.HasPendingRollbacks() {
+				fmt.Fprintf(os.Stderr, "\n%s: undoing the temporary server-side changes, hit it again to abort...\n", sig)
+				go func() {
+					<-ch // a second signal means the operator will not wait
+					os.Exit(130)
+				}()
+				ldapx.RunRollbacks()
+			}
+			os.Exit(130)
+		}
+	}()
+
+	return func() {
+		signal.Stop(ch)
+		close(done)
 	}
 }
 

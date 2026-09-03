@@ -76,15 +76,31 @@ func (c *Client) searchEscalated(base, filter string, attrs []string) (entries [
 		had[v] = true
 	}
 
-	override := fmt.Sprintf(`dn.exact=%q time=unlimited size=unlimited size.pr=unlimited size.prtotal=unlimited`, c.cfg.BindDN)
+	// only the size limits: the caller hit olcSizeLimit, so lifting the time
+	// limit too would hand this identity more than the search needs
+	override := fmt.Sprintf(`dn.exact=%q size=unlimited size.pr=unlimited size.prtotal=unlimited`, c.cfg.BindDN)
+	if had[override] {
+		// the grant is already there and the search was capped anyway, so an
+		// earlier olcLimits clause matches this identity first and wins
+		return nil, fmt.Errorf("%s already grants %q, yet the search is still capped: "+
+			"an earlier olcLimits clause matches this identity first. Reorder olcLimits on %s",
+			dbDN, override, dbDN)
+	}
 	if merr := cfg.Modify(dbDN, []Mod{{Op: ModAdd, Name: "olcLimits", Values: []string{override}}}); merr != nil {
 		return nil, fmt.Errorf("grant temporary unlimited size on %s: %w", dbDN, merr)
 	}
 
+	// a plain defer does not survive a Ctrl-C, and this override lives in
+	// cn=config: interrupting a long dump used to leave the identity unlimited
+	// for good. Register it so the signal handler reverts it too.
+	revert := func() error { return cfg.revertLimit(dbDN, override) }
+	done := DeferRollback(func() { _ = revert() })
+
 	// always restore; if the search succeeded but revert fails, surface it loudly
 	// (the identity would otherwise stay unlimited).
 	defer func() {
-		if rerr := cfg.revertLimit(dbDN, had); rerr != nil && err == nil {
+		done()
+		if rerr := revert(); rerr != nil && err == nil {
 			err = fmt.Errorf("search succeeded but FAILED to restore the size limit on %s (identity %q left unlimited): %w", dbDN, c.cfg.BindDN, rerr)
 		}
 	}()
@@ -92,23 +108,15 @@ func (c *Client) searchEscalated(base, filter string, attrs []string) (entries [
 	return c.search(base, ldap.ScopeWholeSubtree, filter, attrs, bulkPageSize)
 }
 
-// revertLimit deletes every olcLimits value on dbDN that is absent from `had`
-// (i.e. the override searchEscalated added), restoring the prior state.
-func (c *Client) revertLimit(dbDN string, had map[string]bool) error {
-	e, err := c.ReadEntry(dbDN, []string{"olcLimits"})
-	if err != nil {
-		return err
+// revertLimit removes the one value searchEscalated added, and only that one.
+// Deleting "everything that was not in the snapshot" also deleted whatever an
+// operator added while the search was running.
+func (c *Client) revertLimit(dbDN, override string) error {
+	err := c.Modify(dbDN, []Mod{{Op: ModDelete, Name: "olcLimits", Values: []string{override}}})
+	if IsNoSuchAttribute(err) {
+		return nil // already gone, which is the outcome we wanted
 	}
-	var mods []Mod
-	for _, v := range e.GetAll("olcLimits") {
-		if !had[v] {
-			mods = append(mods, Mod{Op: ModDelete, Name: "olcLimits", Values: []string{v}})
-		}
-	}
-	if len(mods) == 0 {
-		return nil
-	}
-	return c.Modify(dbDN, mods)
+	return err
 }
 
 // dataDatabaseDN finds the cn=config database entry whose olcSuffix matches base.
