@@ -12,7 +12,10 @@ import (
 
 // ---- passwd -------------------------------------------------------------
 
-var userPasswdValue string
+var (
+	userPasswdValue string
+	userPasswdStdin bool
+)
 
 var userPasswdCmd = &cobra.Command{
 	Use:   "passwd <login>",
@@ -21,6 +24,10 @@ var userPasswdCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		login := strings.ToLower(strings.TrimSpace(args[0]))
+		newPw, err := resolvePassword(userPasswdValue, userPasswdStdin)
+		if err != nil {
+			return err
+		}
 		cli, err := connect()
 		if err != nil {
 			return err
@@ -37,13 +44,13 @@ var userPasswdCmd = &cobra.Command{
 		// Password Modify generator returns a short password that a non-trivial
 		// pwdMinLength/quality policy would reject.)
 		gen := ""
-		if userPasswdValue == "" {
+		if newPw == "" {
 			p, gerr := setGeneratedPassword(cli, entry.DN)
 			if gerr != nil {
 				return gerr
 			}
 			gen = p
-		} else if _, serr := cli.SetPassword(entry.DN, userPasswdValue); serr != nil {
+		} else if _, serr := cli.SetPassword(entry.DN, newPw); serr != nil {
 			return fmt.Errorf("set password for %s: %w", entry.DN, serr)
 		}
 		log.Debug().Str("dn", entry.DN).Msg("password set")
@@ -143,6 +150,7 @@ var userForceResetCmd = &cobra.Command{
 
 func init() {
 	userPasswdCmd.Flags().StringVar(&userPasswdValue, "password", "", "new password (omit to have the server generate one)")
+	userPasswdCmd.Flags().BoolVar(&userPasswdStdin, "password-stdin", false, passwordStdinHelp)
 	userForceResetCmd.Flags().BoolVar(&userForceResetClear, "clear", false, "remove the pwdReset flag instead of setting it")
 	userCmd.AddCommand(userPasswdCmd, userUnlockCmd, userForceResetCmd)
 }

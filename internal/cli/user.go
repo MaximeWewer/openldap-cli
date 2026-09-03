@@ -56,6 +56,7 @@ var userCmd = &cobra.Command{
 
 var (
 	userAddPassword   string
+	userAddPwStdin    bool
 	userAddNoPassword bool
 	userAddPosix      bool
 	userAddUIDNumber  int
@@ -132,7 +133,11 @@ var userAddCmd = &cobra.Command{
 		}
 
 		// password: explicit, none, or generated (default).
-		password, generated := userAddPassword, false
+		password, err := resolvePassword(userAddPassword, userAddPwStdin)
+		if err != nil {
+			return err
+		}
+		generated := false
 		if !userAddNoPassword && password == "" {
 			// size the generated password to the effective policy (the user does
 			// not exist yet, so this resolves the default pwdMinLength).
@@ -229,6 +234,7 @@ func (r userResult) Text() string {
 
 func init() {
 	userAddCmd.Flags().StringVar(&userAddPassword, "password", "", "set initial userPassword (default: generate a strong one)")
+	userAddCmd.Flags().BoolVar(&userAddPwStdin, "password-stdin", false, passwordStdinHelp)
 	userAddCmd.Flags().BoolVar(&userAddNoPassword, "no-password", false, "create without a password (no auto-generation)")
 	userAddCmd.Flags().StringArrayVar(&userAddSet, "set", nil, "extra attribute name=value (repeatable; unknown attrs are warned and skipped)")
 	userAddCmd.Flags().BoolVar(&userAddPosix, "posix", false, "also make the user a posixAccount")

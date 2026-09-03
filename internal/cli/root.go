@@ -131,7 +131,14 @@ func setupLogging(level, format string) error {
 
 // loadConfig resolves the active profile (file + env override).
 func loadConfig() (*config.Profile, error) {
-	return config.Load(flagConfig, flagProfile)
+	p, err := config.Load(flagConfig, flagProfile)
+	if err != nil {
+		return nil, err
+	}
+	if config.Insecurities != "" {
+		log.Warn().Msg(config.Insecurities)
+	}
+	return p, nil
 }
 
 // connect loads config and opens a bound LDAP client. Callers must Close it.

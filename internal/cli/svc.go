@@ -224,6 +224,7 @@ var (
 	svcAddSubtree  string
 	svcAddAccess   string
 	svcAddPassword string
+	svcAddPwStdin  bool
 )
 
 var svcAddCmd = &cobra.Command{
@@ -240,7 +241,10 @@ var svcAddCmd = &cobra.Command{
 		if svcAddAccess != "read" && svcAddAccess != "write" {
 			return fmt.Errorf("--access must be read or write")
 		}
-		password := svcAddPassword
+		password, err := resolvePassword(svcAddPassword, svcAddPwStdin)
+		if err != nil {
+			return err
+		}
 		generated := false
 		if password == "" {
 			p, err := pwd.Hex(16)
@@ -299,7 +303,10 @@ var svcAddCmd = &cobra.Command{
 
 // ---- passwd -------------------------------------------------------------
 
-var svcPasswdValue string
+var (
+	svcPasswdValue string
+	svcPasswdStdin bool
+)
 
 var svcPasswdCmd = &cobra.Command{
 	Use:   "passwd <name>",
@@ -307,7 +314,10 @@ var svcPasswdCmd = &cobra.Command{
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		name := strings.TrimSpace(args[0])
-		password := svcPasswdValue
+		password, err := resolvePassword(svcPasswdValue, svcPasswdStdin)
+		if err != nil {
+			return err
+		}
 		generated := false
 		if password == "" {
 			p, err := pwd.Hex(16)
@@ -529,7 +539,9 @@ func init() {
 	svcAddCmd.Flags().StringVar(&svcAddSubtree, "subtree", "", "DN the account may access (required)")
 	svcAddCmd.Flags().StringVar(&svcAddAccess, "access", "read", "access level: read|write")
 	svcAddCmd.Flags().StringVar(&svcAddPassword, "password", "", "password (default: generate a 32-char one)")
+	svcAddCmd.Flags().BoolVar(&svcAddPwStdin, "password-stdin", false, passwordStdinHelp)
 	svcPasswdCmd.Flags().StringVar(&svcPasswdValue, "password", "", "password (default: generate a 32-char one)")
+	svcPasswdCmd.Flags().BoolVar(&svcPasswdStdin, "password-stdin", false, passwordStdinHelp)
 
 	svcGrantCmd.Flags().StringVar(&svcGrantTree, "tree", "", "the subtree the account must be able to search and read (required)")
 	svcGrantCmd.Flags().StringArrayVar(&svcGrantMembersOf, "members-of", nil,

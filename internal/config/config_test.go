@@ -146,3 +146,59 @@ func TestEnvBoolAcceptsBoolean(t *testing.T) {
 		t.Error("StartTLS = false, want true")
 	}
 }
+
+func TestEnvFileReadsTheSecret(t *testing.T) {
+	dir := t.TempDir()
+	pwFile := filepath.Join(dir, "bindpw")
+	// the trailing newline `echo` leaves must not become part of the password
+	if err := os.WriteFile(pwFile, []byte("s3cret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LDAP_URL", "ldap://localhost:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_BIND_PW_FILE", pwFile)
+
+	p, err := Load(filepath.Join(dir, "absent.yaml"), "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.BindPW != "s3cret" {
+		t.Errorf("BindPW = %q, want %q", p.BindPW, "s3cret")
+	}
+}
+
+func TestEnvFileReportsAMissingFile(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://localhost:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_BIND_PW_FILE", filepath.Join(t.TempDir(), "nope"))
+
+	if _, err := Load("", ""); err == nil {
+		t.Fatal("Load ignored an unreadable LDAP_BIND_PW_FILE")
+	}
+}
+
+func TestWarnsOnAWorldReadableConfigHoldingASecret(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.yaml")
+	body := "default: dev\nprofiles:\n  dev:\n    url: ldap://localhost:389\n" +
+		"    base_dn: dc=example,dc=org\n    bind_pw: hunter2\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, "dev"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if Insecurities == "" {
+		t.Error("no warning for a 0644 config file holding bind_pw")
+	}
+
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path, "dev"); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if Insecurities != "" {
+		t.Errorf("warned about a 0600 config file: %s", Insecurities)
+	}
+}

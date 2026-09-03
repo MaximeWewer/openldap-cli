@@ -73,6 +73,7 @@ func Load(path, profile string) (*Profile, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	Insecurities = insecureModeWarning(path, f.Profiles)
 
 	if profile == "" {
 		if profile = f.Default; profile == "" {
@@ -178,6 +179,20 @@ func applyEnv(p *Profile) error {
 	envStr(&p.MailDomain, "LDAP_MAIL_DOMAIN")
 	envStr(&p.ConfigBindDN, "LDAP_CONFIG_BIND_DN")
 	envStr(&p.ConfigBindPW, "LDAP_CONFIG_BIND_PW")
+	// the _FILE forms let a container read the secret off a mounted file rather
+	// than an environment variable, which leaks through `docker inspect`,
+	// /proc/<pid>/environ and any crash dump
+	for _, f := range []struct {
+		dst *string
+		key string
+	}{
+		{&p.BindPW, "LDAP_BIND_PW_FILE"},
+		{&p.ConfigBindPW, "LDAP_CONFIG_BIND_PW_FILE"},
+	} {
+		if err := envFile(f.dst, f.key); err != nil {
+			return err
+		}
+	}
 	for _, b := range []struct {
 		dst *bool
 		key string
@@ -199,6 +214,21 @@ func envStr(dst *string, key string) {
 	}
 }
 
+// envFile reads a secret out of the file named by key, taking the first line so
+// a trailing newline from `echo`/`printf` does not become part of the password.
+func envFile(dst *string, key string) error {
+	path, ok := os.LookupEnv(key)
+	if !ok || path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is the operator's chosen secret file
+	if err != nil {
+		return fmt.Errorf("%s: %w", key, err)
+	}
+	*dst = strings.TrimRight(strings.SplitN(string(raw), "\n", 2)[0], "\r")
+	return nil
+}
+
 // envBool refuses what it cannot parse rather than ignoring it: silently
 // dropping LDAP_START_TLS=yes downgrades the connection to a cleartext bind,
 // and silently dropping LDAP_INSECURE=no would do the reverse.
@@ -213,4 +243,31 @@ func envBool(dst *bool, key string) error {
 	}
 	*dst = b
 	return nil
+}
+
+// Insecurities holds the warning Load raised about the config file itself, or
+// "" when there is nothing to say. The caller logs it: a config file holding a
+// bind password is a credential store, and leaving it readable by everyone on
+// the host defeats every other precaution here.
+var Insecurities string
+
+func insecureModeWarning(path string, profiles map[string]Profile) string {
+	holdsSecret := false
+	for _, p := range profiles {
+		if p.BindPW != "" || p.ConfigBindPW != "" {
+			holdsSecret = true
+			break
+		}
+	}
+	if !holdsSecret {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		return fmt.Sprintf("%s holds a bind password and is mode %#o, readable beyond its owner; chmod 600 it", path, mode)
+	}
+	return ""
 }
