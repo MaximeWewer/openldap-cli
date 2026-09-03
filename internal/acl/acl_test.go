@@ -373,3 +373,25 @@ func TestMemberOfFilter(t *testing.T) {
 		t.Errorf("three groups = %q, want %q", got, wantN)
 	}
 }
+
+func TestMemberOfFilterEscapesTheDN(t *testing.T) {
+	// a crafted --members-of used to close the assertion and widen the rule
+	got := MemberOfFilter([]string{`cn=a)(objectClass=*`})
+	if strings.ContainsAny(strings.TrimSuffix(strings.TrimPrefix(got, "(memberOf="), ")"), "()*") {
+		t.Errorf("MemberOfFilter left filter metacharacters unescaped: %s", got)
+	}
+	if want := `(memberOf=cn=a\29\28objectClass=\2a)`; got != want {
+		t.Errorf("MemberOfFilter = %q, want %q", got, want)
+	}
+}
+
+func TestWhoTokenEscapesQuotes(t *testing.T) {
+	// the DN reaches us as RFC 4514 text, so a quote is already `\"`; slapd's
+	// tokenizer eats one layer, so it has to survive two
+	if got, want := DNWho(`cn=a\"b,dc=e`), `dn.exact="cn=a\\\"b,dc=e"`; got != want {
+		t.Errorf("DNWho = %s, want %s", got, want)
+	}
+	if got, want := GroupWho(`cn=g,dc=e`), `group.exact="cn=g,dc=e"`; got != want {
+		t.Errorf("GroupWho = %s, want %s", got, want)
+	}
+}

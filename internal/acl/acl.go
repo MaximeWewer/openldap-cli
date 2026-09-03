@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
 // Edit is one olcAccess change: delete Delete (empty = none) and add Add.
@@ -87,13 +89,26 @@ func Reorder(values []string, from, to int) ([]string, error) {
 	return bodies, nil
 }
 
+// quote wraps a DN in the double quotes an olcAccess token needs, escaping the
+// two characters slapd's line tokenizer treats as special inside them.
+//
+// A DN is RFC 4514 text, so a value holding a quote already reads as `\"` by the
+// time it gets here; interpolating that raw makes the tokenizer hand slapd an
+// unescaped quote and a DN it then rejects. Escaping again keeps the DN intact
+// through both layers, and stops a crafted name from closing the token early
+// and appending clauses of its own.
+func quote(dn string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + r.Replace(dn) + `"`
+}
+
 // DNWho builds the olcAccess "who" token for a single entry (dn.exact).
-func DNWho(dn string) string { return fmt.Sprintf(`dn.exact="%s"`, dn) }
+func DNWho(dn string) string { return "dn.exact=" + quote(dn) }
 
 // GroupWho builds the olcAccess "who" token for a group's members (group.exact).
 // Every member of the group then shares the granted access — the scalable way
 // to give several service accounts the same rights on a tree.
-func GroupWho(groupDN string) string { return fmt.Sprintf(`group.exact="%s"`, groupDN) }
+func GroupWho(groupDN string) string { return "group.exact=" + quote(groupDN) }
 
 // MemberOfFilter builds the `filter=` that narrows a rule to the members of one
 // or more groups: one group gives `(memberOf=<dn>)`, several give an OR of them.
@@ -115,7 +130,9 @@ func MemberOfFilter(groupDNs []string) string {
 			continue
 		}
 		seen[strings.ToLower(dn)] = true
-		parts = append(parts, "(memberOf="+dn+")")
+		// escape: the DN comes from --members-of, and an unescaped ")" or "*"
+		// would end the assertion early and widen the rule past the named group
+		parts = append(parts, "(memberOf="+ldap.EscapeFilter(dn)+")")
 	}
 	switch len(parts) {
 	case 0:
@@ -150,7 +167,7 @@ func (o InjectOpts) selector() string {
 	if scope == "" {
 		scope = "subtree"
 	}
-	s := fmt.Sprintf("to dn.%s=%q", scope, o.Target)
+	s := "to dn." + scope + "=" + quote(o.Target)
 	if o.Filter != "" {
 		s += " filter=" + o.Filter
 	}
