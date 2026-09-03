@@ -268,9 +268,9 @@ var svcAddCmd = &cobra.Command{
 		}
 		generated := false
 		if password == "" {
-			p, err := pwd.Hex(16)
-			if err != nil {
-				return err
+			p, gerr := pwd.Hex(16)
+			if gerr != nil {
+				return gerr
 			}
 			password, generated = p, true
 		}
@@ -341,9 +341,9 @@ var svcPasswdCmd = &cobra.Command{
 		}
 		generated := false
 		if password == "" {
-			p, err := pwd.Hex(16)
-			if err != nil {
-				return err
+			p, gerr := pwd.Hex(16)
+			if gerr != nil {
+				return gerr
 			}
 			password, generated = p, true
 		}

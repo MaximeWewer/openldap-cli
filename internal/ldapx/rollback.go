@@ -4,7 +4,7 @@ import "sync"
 
 // Some operations put the server in a temporary state that a deferred function
 // undoes: searchEscalated widens a size limit for the length of one search, for
-// instance. A deferred function does not run when the process is signalled, so
+// instance. A deferred function does not run when the process is signaled, so
 // a Ctrl-C at the wrong moment leaves that state behind - in cn=config, where
 // nothing will ever clean it up.
 //

@@ -113,9 +113,9 @@ var userImportCmd = &cobra.Command{
 			// through Password Modify after the add instead and the server
 			// hashes it - the column is usable either way, but never in clear.
 			pw := usercsv.Cell(row, cols, usercsv.Password)
-			hashed, clear := pw, ""
+			hashed, cleartext := pw, ""
 			if pw != "" && !usercsv.IsHashed(pw) {
-				hashed, clear = "", pw
+				hashed, cleartext = "", pw
 			}
 			if err := cli.AddEntry(dn, u.AttributeMap(hashed, nil)); err != nil {
 				res.Failed = append(res.Failed, importIssue{login, err.Error()})
@@ -124,8 +124,8 @@ var userImportCmd = &cobra.Command{
 				}
 				continue
 			}
-			if clear != "" {
-				if _, perr := cli.SetPassword(dn, clear); perr != nil {
+			if cleartext != "" {
+				if _, perr := cli.SetPassword(dn, cleartext); perr != nil {
 					res.Warnings = append(res.Warnings, importIssue{login,
 						"created, but the cleartext userPassword was not set: " + perr.Error()})
 				}
