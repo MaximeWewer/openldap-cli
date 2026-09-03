@@ -143,7 +143,7 @@ func ParseWho(tok string) Who {
 		// dn[.<type>][.<style>]: type is self/this, anything else is the style.
 		// A bare `dn=` has no style, and base is the default.
 		w.Scope = "base"
-		for _, part := range strings.Split(strings.TrimPrefix(k, "dn"), ".") {
+		for part := range strings.SplitSeq(strings.TrimPrefix(k, "dn"), ".") {
 			switch part {
 			case "":
 			case "self", "this":

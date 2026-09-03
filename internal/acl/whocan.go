@@ -278,7 +278,7 @@ func WhoCan(values []string, dn, attr string) Decision {
 // negation, an objectClass shorthand — reads as a match, so the rule is shown
 // rather than silently dropped from an answer that claims completeness.
 func attrListHas(list, attr string) bool {
-	for _, a := range strings.Split(list, ",") {
+	for a := range strings.SplitSeq(list, ",") {
 		a = strings.TrimSpace(a)
 		if a == attr || a == "*" || strings.HasPrefix(a, "@") || strings.HasPrefix(a, "!") {
 			return true

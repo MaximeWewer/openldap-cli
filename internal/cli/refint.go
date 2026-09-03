@@ -75,7 +75,7 @@ func memberRefsMaintainedBy(cc *ldapx.Client) (string, error) {
 			for _, v := range full.GetAll("olcRefintAttribute") {
 				// the value is a space-separated list in slapd.conf form, and one
 				// attribute per value in cn=config form — handle both
-				for _, a := range strings.Fields(v) {
+				for a := range strings.FieldsSeq(v) {
 					if strings.EqualFold(a, "member") {
 						return "the refint overlay (olcRefintAttribute: member)", nil
 					}

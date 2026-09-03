@@ -1,10 +1,15 @@
-# golangci-lint configuration — single static-analysis gate (gofmt/goimports,
-# govet+shadow, errcheck, ineffassign, staticcheck, gocyclo, misspell, unused).
+# golangci-lint configuration - single static-analysis gate (gofmt/goimports,
+# govet+shadow, errcheck, ineffassign, staticcheck, gocyclo, misspell, unused),
+# targeting Go 1.27.
 version: "2"
 
 run:
   timeout: 5m
   tests: true
+  # target language version for the linters that gate suggestions on it
+  # (staticcheck, gocritic, modernize). Defaults to the go directive in go.mod;
+  # stated here so a go.mod bump never silently changes what lint accepts.
+  go: "1.27"
 
 linters:
   default: none
@@ -29,11 +34,14 @@ linters:
     - unconvert
     - unparam
     - wastedassign
-    # modern Go
+    # modern Go - flag what the language/stdlib now does better itself
+    - modernize
     - usestdlibvars
     - copyloopvar
     - intrange
     - perfsprint
+    - exptostd
+    - usetesting
     # broad diagnostics + hygiene
     - gocritic
     - nolintlint

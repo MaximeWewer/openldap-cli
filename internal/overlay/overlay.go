@@ -75,11 +75,11 @@ func classToName(oc string) string {
 // `SUP olcOverlayConfig` — i.e. it configures an overlay rather than anything
 // else in cn=config.
 func derivesFromOverlayConfig(def string) bool {
-	i := strings.Index(def, " SUP ")
-	if i < 0 {
+	_, after, ok := strings.Cut(def, " SUP ")
+	if !ok {
 		return false
 	}
-	f := strings.Fields(def[i+5:])
+	f := strings.Fields(after)
 	// a multi-valued SUP ( a $ b ) is not used by overlay classes; the single
 	// superior is the first token.
 	return len(f) > 0 && strings.EqualFold(strings.Trim(f[0], "'"), "olcOverlayConfig")

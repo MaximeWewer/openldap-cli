@@ -164,8 +164,8 @@ var entryRenameCmd = &cobra.Command{
 		}
 		parent := strings.TrimSpace(entryNewSuperior)
 		if parent == "" {
-			if i := strings.IndexByte(dn, ','); i >= 0 { // keep the original parent
-				parent = dn[i+1:]
+			if _, after, ok := strings.Cut(dn, ","); ok { // keep the original parent
+				parent = after
 			}
 		}
 		newDN := newRDN

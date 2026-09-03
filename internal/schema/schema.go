@@ -29,7 +29,7 @@ func hasFlag(def, flag string) bool {
 			bare.WriteByte(c)
 		}
 	}
-	for _, f := range strings.Fields(bare.String()) {
+	for f := range strings.FieldsSeq(bare.String()) {
 		if strings.Trim(f, "()") == flag {
 			return true
 		}
@@ -40,11 +40,11 @@ func hasFlag(def, flag string) bool {
 // Names extracts the NAME value(s) from an objectClass/attributeType definition,
 // handling both `NAME 'x'` and `NAME ( 'x' 'y' )`.
 func Names(def string) []string {
-	i := strings.Index(def, "NAME")
-	if i < 0 {
+	_, after, ok := strings.Cut(def, "NAME")
+	if !ok {
 		return nil
 	}
-	s := def[i+4:]
+	s := after
 	var names []string
 	inParen := false
 	for len(s) > 0 {

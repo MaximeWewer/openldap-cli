@@ -35,8 +35,8 @@ func (m Impact) Empty() bool { return len(m.Lost) == 0 && len(m.Dead) == 0 }
 // ruleSelector returns the parsed `to …` part of a rule body.
 func ruleSelector(body string) selector {
 	s := body
-	if i := strings.Index(body, " by "); i >= 0 {
-		s = body[:i]
+	if before, _, ok := strings.Cut(body, " by "); ok {
+		s = before
 	}
 	return parseSelector(s)
 }

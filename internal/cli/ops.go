@@ -587,7 +587,7 @@ type replicationResult struct {
 // value for display. The value is `rid=NNN provider=ldap://… searchbase=… …`.
 func syncreplRIDProvider(v string) string {
 	rid, provider := "", ""
-	for _, tok := range strings.Fields(v) {
+	for tok := range strings.FieldsSeq(v) {
 		switch {
 		case strings.HasPrefix(tok, "rid="):
 			rid = strings.TrimPrefix(tok, "rid=")

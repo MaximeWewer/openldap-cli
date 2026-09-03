@@ -1,6 +1,6 @@
 module github.com/MaximeWewer/openldap-cli
 
-go 1.26.5
+go 1.27.1
 
 require (
 	github.com/go-ldap/ldap/v3 v3.4.13
