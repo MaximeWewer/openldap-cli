@@ -196,8 +196,10 @@ var opsAuditBindsCmd = &cobra.Command{
 		cutoff := ldaptime.Format(time.Now().Add(-since))
 		filter := fmt.Sprintf("(&(reqType=bind)(reqStart>=%s))", cutoff)
 		if auditUser != "" {
+			// escape the base too: it comes from the profile, but a base_dn with
+			// a filter metacharacter would silently change what this counts
 			filter = fmt.Sprintf("(&(reqType=bind)(reqStart>=%s)(reqDN=cn=%s,%s))",
-				cutoff, ldapx.EscapeFilter(strings.ToLower(auditUser)), cc.UserBase())
+				cutoff, ldapx.EscapeFilter(strings.ToLower(auditUser)), ldapx.EscapeFilter(cc.UserBase()))
 		}
 		entries, err := cc.Search("cn=accesslog", filter,
 			[]string{"reqDN", "reqResult", "reqStart", "reqMethod"})
