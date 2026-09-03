@@ -94,7 +94,8 @@ func Cell(row []string, cols map[string]int, field string) string {
 	if !ok || i >= len(row) {
 		return ""
 	}
-	return strings.TrimSpace(row[i])
+	// strip the quote SafeCell added on export, so a round-trip is lossless
+	return strings.TrimPrefix(strings.TrimSpace(row[i]), "'")
 }
 
 // hashPrefix matches the {SCHEME} an already-hashed userPassword carries.
@@ -107,3 +108,19 @@ var hashPrefix = regexp.MustCompile(`^\{[A-Za-z0-9-]+\}`)
 // ACLs let read the attribute. Only ppolicy's olcPPolicyHashCleartext would
 // hash it, and it is off by default.
 func IsHashed(v string) bool { return hashPrefix.MatchString(v) }
+
+// SafeCell defuses a value a spreadsheet would run as a formula.
+//
+// Excel, LibreOffice and Sheets treat a cell starting with = + - @ (or a lone
+// tab/CR) as a formula, so a user who can set their own displayName can put
+// =HYPERLINK(...) or a DDE call in the export and have it fire when an admin
+// opens the file. Prefixing a single quote is the conventional defusing: the
+// spreadsheet shows the text and runs nothing.
+//
+// `users import` reads the quote back off, so an export still round-trips.
+func SafeCell(v string) string {
+	if v == "" || !strings.ContainsRune("=+-@\t\r", rune(v[0])) {
+		return v
+	}
+	return "'" + v
+}

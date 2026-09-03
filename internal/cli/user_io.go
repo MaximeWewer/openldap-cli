@@ -252,7 +252,7 @@ var userExportCmd = &cobra.Command{
 		for _, e := range entries {
 			rec := make([]string, len(cols))
 			for i, c := range cols {
-				rec[i] = e.Get(c)
+				rec[i] = usercsv.SafeCell(e.Get(c))
 			}
 			if err := w.Write(rec); err != nil {
 				return err

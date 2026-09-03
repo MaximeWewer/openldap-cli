@@ -131,3 +131,33 @@ func TestIsHashed(t *testing.T) {
 		}
 	}
 }
+
+const quote = "'"
+
+func TestSafeCellDefusesFormulas(t *testing.T) {
+	// a displayName the user picked would otherwise run when an admin opens
+	// the export in a spreadsheet
+	for in, want := range map[string]string{
+		`=HYPERLINK("http://evil")`: quote + `=HYPERLINK("http://evil")`,
+		"+1234":                     quote + "+1234",
+		`-cmd|` + quote + ` /c calc` + quote + `!A1`: quote + `-cmd|` + quote + ` /c calc` + quote + `!A1`,
+		"@SUM(A1)":  quote + "@SUM(A1)",
+		"Jean-Marc": "Jean-Marc",
+		"":          "",
+		"a=b":       "a=b",
+	} {
+		if got := SafeCell(in); got != want {
+			t.Errorf("SafeCell(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCellStripsTheDefusingQuote(t *testing.T) {
+	// export -> import must round-trip: what SafeCell added, Cell takes back
+	cols := map[string]int{DisplayName: 0}
+	for _, v := range []string{"=SUM(A1)", "+1", "plain"} {
+		if got := Cell([]string{SafeCell(v)}, cols, DisplayName); got != v {
+			t.Errorf("round-trip of %q gave %q", v, got)
+		}
+	}
+}
