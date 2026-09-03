@@ -207,6 +207,8 @@ var userExportCmd = &cobra.Command{
 		"The global -o flag does not apply here.\n\n" +
 		"--with-hash appends userPassword, which import stores as the hash it is:\n" +
 		"that is what makes the pair a migration rather than a listing.\n\n" +
+		"A column holds ONE value, so extra values of a multi-valued attribute (a\n" +
+		"second mail, say) are left out and warned about; --ldif keeps them.\n\n" +
 		"Group MEMBERSHIPS are not in there, and cannot be: they live on the group\n" +
 		"entries, not the users'. This is a copy of the people, not of the tree —\n" +
 		"--ldif writes full entries instead (re-importable with import-ldif).",
@@ -249,14 +251,24 @@ var userExportCmd = &cobra.Command{
 		if err := w.Write(cols); err != nil {
 			return err
 		}
+		// one CSV column holds one value, but cn/mail are multi-valued: say so
+		// rather than let the extra values disappear without a word
+		dropped := map[string]int{}
 		for _, e := range entries {
 			rec := make([]string, len(cols))
 			for i, c := range cols {
+				if vals := e.GetAll(c); len(vals) > 1 {
+					dropped[c] += len(vals) - 1
+				}
 				rec[i] = usercsv.SafeCell(e.Get(c))
 			}
 			if err := w.Write(rec); err != nil {
 				return err
 			}
+		}
+		for attr, n := range dropped {
+			log.Warn().Str("attribute", attr).Int("values", n).
+				Msg("CSV holds one value per column: extra values were left out, use --ldif for a full copy")
 		}
 		log.Debug().Int("users", len(entries)).Msg("export done")
 		return w.Error()
