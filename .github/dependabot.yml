@@ -1,0 +1,20 @@
+# Nothing here watches for a dependency CVE between releases; govulncheck in
+# the security workflow catches the reachable ones, and these bumps keep the
+# tree close enough to upstream that the fix is a version bump, not a port.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

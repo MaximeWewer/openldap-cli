@@ -1,4 +1,4 @@
-.PHONY: build install test-up test-reset test-down test-logs tidy vet
+.PHONY: build install test-up test-reset test-down test-logs tidy vet vuln
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X github.com/MaximeWewer/openldap-cli/internal/cli.version=$(VERSION)
@@ -20,6 +20,9 @@ lint: ## run golangci-lint (install: https://golangci-lint.run)
 
 security: ## run gosec (install: go install github.com/securego/gosec/v2/cmd/gosec@latest)
 	gosec -quiet ./cmd/... ./internal/...
+
+vuln: ## check dependencies for reachable CVEs (install: go install golang.org/x/vuln/cmd/govulncheck@latest)
+	govulncheck ./...
 
 unit: ## run unit tests (pure logic, no server needed)
 	go test ./internal/...
