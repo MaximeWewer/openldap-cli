@@ -59,7 +59,11 @@ func (o *Writer) Emit(v Renderable) error {
 		_, err = o.w.Write(b)
 		return err
 	default:
-		_, err := fmt.Fprintln(o.w, v.Text())
+		// escape here rather than in each Text(): attribute values are written
+		// by whoever can write the entry, so any of them can carry ESC
+		// sequences that repaint the operator's terminal. JSON and YAML encode
+		// control characters themselves, so only the text path needs it.
+		_, err := fmt.Fprintln(o.w, SafeBlock(v.Text()))
 		return err
 	}
 }
