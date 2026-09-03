@@ -27,7 +27,10 @@ func Connect(p *config.Profile) (*Client, error) {
 	if p.URL == "" {
 		return nil, errors.New("ldap url not set")
 	}
-	tlsCfg := &tls.Config{InsecureSkipVerify: p.Insecure} // #nosec G402 -- opt-in dev flag (insecure: true / LDAP_INSECURE)
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: p.Insecure, // #nosec G402 -- opt-in dev flag (insecure: true / LDAP_INSECURE)
+	}
 
 	conn, err := ldap.DialURL(p.URL, ldap.DialWithTLSConfig(tlsCfg))
 	if err != nil {
