@@ -54,6 +54,7 @@ make integration  # ldapx façade vs the test LDAP - run `make test-up` first
 make e2e          # build the binary + drive every command group end-to-end
 make lint         # golangci-lint (~23 linters; config in .golangci.yml)
 make security     # gosec
+make vuln         # govulncheck - CVEs in dependencies this binary can reach
 ```
 
 ## Configure
@@ -74,6 +75,7 @@ profiles:
     group_ou: ou=groups
     policy_ou: ou=policies
     mail_domain: example.org
+    timeout: 2m                                    # per-operation cap (default 2m)
     # second bind for cn=config writes (svc ACL, ops reads):
     config_bind_dn: cn=adminconfig,cn=config
     config_bind_pw: ""                             # prefer LDAP_CONFIG_BIND_PW
@@ -82,7 +84,16 @@ profiles:
 Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 `LDAP_USER_OU`, `LDAP_GROUP_OU`, `LDAP_POLICY_OU`, `LDAP_MAIL_DOMAIN`,
 `LDAP_CONFIG_BIND_DN`, `LDAP_CONFIG_BIND_PW`, `LDAP_START_TLS`, `LDAP_INSECURE`,
-`LDAP_SASL_EXTERNAL`.
+`LDAP_SASL_EXTERNAL`, `LDAP_TIMEOUT`.
+
+A boolean that does not parse is an **error**, not a shrug: `LDAP_START_TLS=yes`
+used to be ignored and left the bind in cleartext.
+
+**Secrets.** `LDAP_BIND_PW_FILE` and `LDAP_CONFIG_BIND_PW_FILE` read the password
+from a file (first line) instead of the environment - what you want for a Docker
+or Kubernetes secret, which `docker inspect` and `/proc/<pid>/environ` would
+otherwise hand out. A config file that stores a `bind_pw` and is readable beyond
+its owner gets a warning; `chmod 600` it.
 
 ### SASL EXTERNAL over `ldapi://` (passwordless local admin)
 
@@ -173,15 +184,24 @@ cover. Uses the data bind; `--config-bind` targets `cn=config`.
 
 | Command                                                                                                              | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `user add <login> [--password\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes - unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber; it needs the `nis` schema and **checks for it first**, naming it instead of failing on `Undefined Attribute Type` |
+| `user add <login> [--password\|--password-stdin\|--no-password] [--set k=v …] [--posix [--uid-number\|--gid-number\|--home\|--shell]]` | `firstname.lastname` derives givenName/sn/displayName; a **plain login** (e.g. `demo1`) sets uid/cn/sn=login; **generates a strong password sized to the effective ppolicy** if none given (printed once); `--set` adds arbitrary attributes - unknown-to-schema ones are **warned & skipped**; `--posix` auto-assigns uidNumber; it needs the `nis` schema and **checks for it first**, naming it instead of failing on `Undefined Attribute Type` |
 | `user delete <login>` `[--no-fix-refs]`                                                                              | drops the user from the groups naming it - **checked**, not assumed: repaired from here unless the server maintains it (see Gotchas). A group whose only member it was is reported, not emptied                                                                                                                                                                                                                                                     |
 | `user info <login>`                                                                                                  | attrs + groups + lockout/mustChange/failures + assigned policy. The multi-valued identity attributes (`uid`, `cn`, `sn`, `givenName`, `mail`) show **every** value and are JSON arrays - a second `mail` is not hidden                                                                                                                                                                                                                              |
-| `user passwd <login> [--password]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it - no manual sizing                                                                                                                                                                                                                     |
+| `user passwd <login> [--password\|--password-stdin]`                                                                                   | Password Modify ext-op (ppolicy hashes). Without `--password` the CLI generates one **client-side, sized to the effective ppolicy** (`pwdMinLength`) and **retries stronger** if the server still rejects it - no manual sizing                                                                                                                                                                                                                     |
 | `user set <login> <attr> [value...]`                                                                                 | replace attribute; no value = delete it                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `user rename <old> <new.login>` `[--no-fix-acl] [--no-fix-refs]`                                                     | cn modrdn **in place** (the user keeps its OU, sub-OUs included) + refresh derived attrs; re-points the `olcAccess` rules **and** the group memberships naming the old DN                                                                                                                                                                                                                                                                           |
 | `user unlock <login>`                                                                                                | clears `pwdAccountLockedTime`; best-effort failure-counter reset via Relax control                                                                                                                                                                                                                                                                                                                                                                  |
 | `user force-reset <login> [--clear]`                                                                                 | sets/clears `pwdReset`                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `user move <login> <new-parent-dn>` `[--no-fix-acl]`                                                                 | modrdn to another OU (keeps RDN); re-points the `olcAccess` rules naming the old DN                                                                                                                                                                                                                                                                                                                                                                 |
+
+Anywhere a command takes `--password`, it also takes **`--password-stdin`**:
+`--password` is visible in `ps` and `/proc/<pid>/cmdline` while the command runs,
+and stays in the shell history afterwards. Pipe it instead - only the trailing
+newline is stripped, so a password may end in a space:
+
+```bash
+printf '%s' "$PW" | openldap-cli user passwd toto.titi --password-stdin
+```
 
 (Listing, import and export are inherently set-oriented - see `users` below.)
 
@@ -191,14 +211,14 @@ Plural commands act on many targets at once (the singular forms act on one).
 
 | Command                                                                   | Notes                                                                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users delete [login…] [--group\|--filter] [--yes]`                       | by explicit logins and/or a selector                                                                                                                                                                                                                                                                |
+| `users delete [login…] [--group\|--filter] [--yes]`                       | by explicit logins and/or a selector. `--filter` is ANDed with `objectClass=inetOrgPerson`, so `(objectClass=*)` cannot take the OUs and groups sitting under `user_ou` with it                                                                                                                                                                                                                                                                |
 | `users unlock [login…] [--group\|--filter\|--all-locked] [--yes]`         |                                                                                                                                                                                                                                                                                                     |
 | `users force-reset [login…] [--group\|--filter] [--yes]`                  |                                                                                                                                                                                                                                                                                                     |
 | `users set <attr> <value> [login…] [--group\|--filter] [--yes] [--force]` | empty value = delete the attribute. Refuses per user when the replace would drop values of a multi-valued attribute (`mail`, `telephoneNumber`) - same guard as `user set`; `--force` applies it                                                                                                    |
 | `users passwd [login…] [--group\|--filter] [--yes]`                       | generates a fresh password per user (printed)                                                                                                                                                                                                                                                       |
 | `users list [--group\|--locked\|--posix]`                                 | filtered listing                                                                                                                                                                                                                                                                                    |
-| `users import <csv> [--stop-on-error]`                                    | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order - what `export` writes. Headerless files stay positional: `login[,group][,mail]`                                                                   |
-| `users export [--group] [--with-hash] [--ldif]`                           | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). Group memberships are not in the CSV - they live on the group entries; `--ldif` writes full entries instead |
+| `users import <csv> [--stop-on-error]`                                    | with a header, columns are read **by name** (`login\|uid`, `group`, `mail`, `cn`, `sn`, `givenName`, `displayName`, `userPassword`) in any order - what `export` writes. Headerless files stay positional: `login[,group][,mail]`. A `userPassword` that already carries a `{SCHEME}` is stored as the hash it is; a **cleartext** one goes through Password Modify so the server hashes it, rather than landing in the directory in the clear |
+| `users export [--group] [--with-hash] [--ldif]`                           | CSV → stdout (global `-o` N/A), header included, and **`import` reads it back as itself**. `--with-hash` adds `userPassword`, which import stores as the hash it is (a real migration). A cell starting `= + - @` is prefixed with `'` so a spreadsheet shows it instead of running it (import strips the quote back off). One column holds one value, so extra values of a multi-valued `mail`/`cn` are left out **and warned about** - `--ldif` keeps them. Group memberships are not in the CSV - they live on the group entries |
 | `groups list [--members]` / `svcs list`                                   | listings                                                                                                                                                                                                                                                                                            |
 | `groups delete <name…>` / `svcs delete <name…>`                           | bulk delete by name. `svcs delete` cleans up each account's `svc grant` ACL clauses and memberships, like the singular `svc delete`                                                                                                                                                                 |
 
@@ -244,8 +264,8 @@ non-zero.
 
 | Command                                                                                         | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `svc add <name> --subtree DN --access read\|write [--password]`                                 | creates entry **and** injects an `olcAccess` clause; auto 32-char password                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `svc passwd <name> [--password]`                                                                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `svc add <name> --subtree DN --access read\|write [--password\|--password-stdin]`                                 | creates entry **and** injects an `olcAccess` clause; auto 32-char password                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `svc passwd <name> [--password\|--password-stdin]`                                                                |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `svc delete <name>`                                                                             | deletes entry **and** strips its ACL clauses                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `svc info <name>`                                                                               | surfaces the ACL clauses referencing the account (listing is `svcs list`)                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `svc grant <name> --tree DN [--members-of <group>]… [--access read\|write]` (alias `grant-read`) | **the "an app must work on a tree" recipe**: emits both rules it needs - the container rule (so the tree can be used as a search base) plus the entry rule - each auto-placed above the rule that would shadow it, `by * break` (additive), idempotent. The container access follows `--access`: `search` for read, **`write` for `--access write`** (creating/deleting a child needs write on the parent). `--members-of` narrows the entry rule to that group's members (least privilege) and is **repeatable** - several groups become one OR filter in the same rule |
@@ -255,6 +275,13 @@ non-zero.
 new rule is auto-placed **above** whatever would shadow it, and `revoke` drops
 the rules it empties - so you don't hand-manage `{N}` indexes. See the ACL
 gotchas below.
+
+`revoke`, `move` and the rename repair renumber every rule, so they rewrite the
+whole list - as a **compare-and-swap**: the write names the values it read, and
+the server refuses it (changing nothing) if anyone edited the rules meanwhile,
+rather than silently erasing their edit. A rewrite that would leave `olcAccess`
+empty is refused outright: the database would fall back to slapd's default
+access, which is wider than whatever was being revoked.
 
 ### ops (diagnostics - read via the config bind)
 
@@ -291,7 +318,7 @@ gotchas below.
 
 | Command                                   | Notes                                                                                                                                                                                                                                                                                                                                                                  |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` so size never truncates. **Reads through the bind's ACLs** - a non-rootDN dump silently omits entries and attributes (`userPassword`) it may not read, so the command checks against the real entry count and warns; take backups as the **rootDN** |
+| `backup data <file> [--operational]`      | dump the `base_dn` subtree as LDIF; gzip when the name ends in `.gz`. Pages automatically and lifts `olcSizeLimit` so size never truncates. **Reads through the bind's ACLs** - a non-rootDN dump silently omits entries and attributes (`userPassword`) it may not read, so the command checks against the real entry count and warns; take backups as the **rootDN**. The file is written to a temp sibling and renamed on success (a failed dump never replaces a good one) and is created **0600** - it holds every password hash |
 | `backup config <file>`                    | dump `cn=config` (config bind). Inspection / DR record - **not** restorable live over LDAP                                                                                                                                                                                                                                                                             |
 | `backup restore <file> [--stop-on-error]` | re-add entries from a plain or gzipped LDIF (auto-detected). **Bind as the rootDN**                                                                                                                                                                                                                                                                                    |
 
@@ -299,6 +326,10 @@ Restore strips server-managed attributes (`entryUUID`, `entryCSN`,
 `structuralObjectClass`, `memberOf`, ppolicy timers …) and sends the **Relax**
 control so a pre-hashed `userPassword` is accepted under a strict ppolicy - but
 Relax is only honored for the **rootDN**, so run restores with a rootDN profile.
+Entries are applied shallowest DN first, so a parent is never missing when its
+child lands. Both `backup restore` and `import-ldif` **re-add** what they read,
+so an LDIF carrying `changetype: modify`/`delete`, or a `attr:< url` value they
+would have to fetch, is refused rather than applied as its opposite.
 This is a logical backup; it **complements**, and does not replace, a
 filesystem / `slapcat` backup (operational/replication state and the config tree
 are not restorable over the wire).
@@ -340,6 +371,9 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
   `Insufficient Access Rights` refusal names it.
 - **Generated passwords match the effective `pwdMinLength`** and retry stronger;
   pass `--password` if a custom module still refuses. `--with-hash` prints hashes.
+- **`--password` is readable by every local user** while the command runs (`ps`,
+  `/proc/<pid>/cmdline`) and lands in the shell history - use `--password-stdin`
+  in anything scripted, and `LDAP_BIND_PW_FILE` for the bind password itself.
 - **`--posix` needs the `nis` schema loaded server-side** — the CLI names it
   instead of failing on a cryptic `Undefined Attribute Type`.
 
@@ -368,12 +402,21 @@ profiles. See [`tests/README.md`](tests/README.md) for details.
 - **Names with `,` `+` `\` `"` `;` `<` `>` are fine** — every RDN is RFC 4514-escaped.
 - **Typed commands only manage `groupOfNames`/`inetOrgPerson`** — another type is
   named with its real objectClass, and `list` reports what its filter skipped.
+- **Attribute values are printed escaped** - anyone who can write their own `cn`
+  or `description` can put terminal escape sequences in one, so text output shows
+  `\x1b[2J` rather than letting it repaint your screen. JSON/YAML encode them.
+- **An LDIF value that would not survive a round-trip is base64'd**, a trailing
+  space included - writing `cn: admin ` reads back as `admin`, so `backup` never
+  does.
 
 **Scale, backup, diagnostics**
 
 - **Reads over `olcSizeLimit` (default 500) page and lift the limit** via the
-  config bind — never a silent truncation. `olcLimits` is the same ordered trap:
-  `config limits set --for` updates in place, `lint`/`delete --for` clean up.
+  config bind - never a silent truncation. The override is a real `olcLimits`
+  value in `cn=config` for the length of the search, and **Ctrl-C undoes it**
+  before exiting (a second Ctrl-C aborts anyway); only a `SIGKILL` can strand it.
+  `olcLimits` is the same ordered trap: `config limits set --for` updates in
+  place, `lint`/`delete --for` clean up.
 - **`backup data` reads through the bind's ACLs — take it as the rootDN**, or
   entries and `userPassword` are silently dropped. The CLI checks the real entry
   count (`olmMDBEntries`) and warns; a warning means the file is not restorable.
@@ -405,7 +448,7 @@ internal/
   overlay/  overlay catalog + defaults         (unit-tested)
   humanize/ byte sizes                         (unit-tested)
   ldaptime/ generalizedTime                    (unit-tested)
-  output/   text/json/yaml rendering
+  output/   text/json/yaml rendering + terminal-escape sanitizing
 tests/      faithful test OpenLDAP             (compose + bootstrap)
 ```
 
