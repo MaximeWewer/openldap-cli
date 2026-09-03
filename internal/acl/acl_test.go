@@ -395,3 +395,36 @@ func TestWhoTokenEscapesQuotes(t *testing.T) {
 		t.Errorf("GroupWho = %s, want %s", got, want)
 	}
 }
+
+func TestRemoveGranteeKeepsADNContainingBy(t *testing.T) {
+	// " by " inside a quoted DN is not a clause separator; splitting on it
+	// rewrote the rule into something nobody wrote
+	who, other := DNWho("cn=svc,dc=e"), DNWho("cn=keep,dc=e")
+	rules := []string{
+		`{0}to dn.subtree="ou=stand by,dc=e" by ` + who + ` read by ` + other + ` read by * none`,
+	}
+	bodies, removed, dropped := RemoveGrantee(rules, who)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if dropped != 0 {
+		t.Fatalf("dropped = %d, want 0", dropped)
+	}
+	// the DN survives whole, and the other grantee keeps its access
+	want := `to dn.subtree="ou=stand by,dc=e" by ` + other + ` read by * none`
+	if bodies[0] != want {
+		t.Errorf("body  = %q\nwant  = %q", bodies[0], want)
+	}
+}
+
+func TestInjectIsIdempotentAcrossWhitespace(t *testing.T) {
+	// the same grant written with padding is the same grant
+	o := InjectOpts{Target: "ou=p,dc=e", Scope: "subtree", Who: DNWho("cn=svc,dc=e"), Access: "read"}
+	rules := []string{
+		`{0}to dn.subtree="ou=p,dc=e" by  ` + DNWho("cn=svc,dc=e") + `   read by * break`,
+	}
+	edit, appended := Inject(rules, o)
+	if appended || edit.Add != "" || edit.Delete != "" {
+		t.Errorf("Inject duplicated an existing grant: %+v (appended=%v)", edit, appended)
+	}
+}

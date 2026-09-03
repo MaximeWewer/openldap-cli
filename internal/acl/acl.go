@@ -227,9 +227,13 @@ func Inject(values []string, o InjectOpts) (edit Edit, appended bool) {
 		if !matchesSelector(body, o) {
 			continue
 		}
-		// already granted -> no change (keeps re-runs idempotent)
+		// already granted -> no change (keeps re-runs idempotent). Compare on
+		// collapsed whitespace: a rule written by hand with two spaces between
+		// the who-token and the access level grants exactly the same thing, and
+		// matching byte for byte would append a duplicate clause every run.
+		want := strings.Join(strings.Fields(o.Who+" "+o.Access), " ")
 		for _, c := range byClauses(body) {
-			if strings.TrimSpace(c) == o.Who+" "+o.Access {
+			if strings.Join(strings.Fields(c), " ") == want {
 				return Edit{}, false
 			}
 		}
@@ -294,16 +298,13 @@ func removeGrantee(values []string, who string, match func(selector) bool) (bodi
 			continue
 		}
 		if match != nil {
-			sel := r.body
-			if i := strings.Index(r.body, " by "); i >= 0 {
-				sel = r.body[:i]
-			}
+			sel := splitByClauses(r.body)[0]
 			if !match(parseSelector(sel)) {
 				bodies = append(bodies, r.body)
 				continue
 			}
 		}
-		parts := strings.Split(r.body, " by ") // parts[0]="to <target>", rest="<who> <access>"
+		parts := splitByClauses(r.body) // parts[0]="to <target>", rest="<who> <access>"
 		kept := []string{parts[0]}
 		for _, p := range parts[1:] {
 			if strings.Contains(p, who) {

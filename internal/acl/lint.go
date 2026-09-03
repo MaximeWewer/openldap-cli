@@ -201,11 +201,37 @@ func covers(a, b selector) bool {
 
 // byClauses returns the `by …` clauses of a rule body.
 func byClauses(body string) []string {
-	parts := strings.Split(body, " by ")
+	parts := splitByClauses(body)
 	if len(parts) < 2 {
 		return nil
 	}
 	return parts[1:]
+}
+
+// splitByClauses splits a rule body into its "to ..." head and one entry per
+// `by` clause, ignoring " by " inside a quoted DN.
+//
+// A plain strings.Split would cut `dn.exact="cn=stand by,dc=e"` in half and
+// hand the caller two fragments of a DN as if they were access clauses - which,
+// on the revoke path, rewrites the rule into something no one wrote.
+func splitByClauses(body string) []string {
+	var parts []string
+	start, inQuote, esc := 0, false, false
+	for i := 0; i < len(body); i++ {
+		switch {
+		case esc:
+			esc = false
+		case body[i] == '\\':
+			esc = true
+		case body[i] == '"':
+			inQuote = !inQuote
+		case !inQuote && strings.HasPrefix(body[i:], " by "):
+			parts = append(parts, body[start:i])
+			i += len(" by ") - 1
+			start = i + 1
+		}
+	}
+	return append(parts, body[start:])
 }
 
 // hasBreak reports whether any clause ends in `break`, which lets evaluation
