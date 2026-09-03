@@ -137,7 +137,9 @@ func dumpSubtree(cli *ldapx.Client, base, path string) error {
 		return fmt.Errorf("dump %s: %w", base, err)
 	}
 
-	f, err := os.Create(path) // #nosec G304 -- destination chosen by the operator
+	// 0600, not the 0666&umask of os.Create: a data dump taken as the rootDN
+	// carries every userPassword hash in the directory
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) // #nosec G304 -- destination chosen by the operator
 	if err != nil {
 		return err
 	}
