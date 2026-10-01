@@ -480,14 +480,12 @@ func describePublished(certs []*x509.Certificate) []certInfo {
 	out := make([]certInfo, 0, len(certs))
 	for i, c := range certs {
 		expired, days := tlsx.Expiry(c, now)
-		kind := "CA"
+		kind := "not a CA certificate" // published, but it anchors nothing
 		switch {
 		case tlsx.IsSelfSigned(c):
 			kind = "root CA"
 		case c.IsCA:
 			kind = "intermediate CA"
-		case !c.IsCA:
-			kind = "not a CA certificate"
 		}
 		out = append(out, certInfo{
 			Position:    i,

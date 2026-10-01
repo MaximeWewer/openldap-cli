@@ -43,7 +43,7 @@ profiles:
     user_ou: ou=people
     group_ou: ou=groups
     mail_domain: example.org
-    insecure: true          # dev only: skip TLS cert verify
+    insecure: true          # dev only: skip TLS cert verify (excludes ca_file)
 
   prod:
     url: ldaps://ldap.example.org:636

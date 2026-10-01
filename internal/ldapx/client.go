@@ -36,6 +36,15 @@ func Connect(p *config.Profile) (*Client, error) {
 	if p.URL == "" {
 		return nil, errors.New("ldap url not set")
 	}
+	// Both set is not a preference to resolve, it is a contradiction: insecure
+	// wins in crypto/tls, so the CA would be loaded, installed as the only root,
+	// and then never consulted. Whoever wrote both believes they are pinning to
+	// their CA while verifying nothing at all, so say so instead of picking one.
+	if p.Insecure && p.CAFile != "" {
+		return nil, errors.New("insecure and ca_file are contradictory: insecure turns verification off " +
+			"entirely, so ca_file would be ignored. Drop insecure to verify against ca_file, " +
+			"or drop ca_file to knowingly skip verification")
+	}
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: p.Insecure, // #nosec G402 -- opt-in dev flag (insecure: true / LDAP_INSECURE)

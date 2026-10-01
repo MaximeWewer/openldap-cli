@@ -4,7 +4,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/MaximeWewer/openldap-cli/internal/config"
 
 	"github.com/go-ldap/ldap/v3"
 )
@@ -124,5 +127,32 @@ func TestGetAllOptIgnoresAttributeOptions(t *testing.T) {
 	}
 	if got := e.GetAllOpt("userCertificate"); got != nil {
 		t.Errorf("GetAllOpt invented values: %v", got)
+	}
+}
+
+func TestConnectRefusesInsecureTogetherWithCAFile(t *testing.T) {
+	// crypto/tls lets InsecureSkipVerify win, so the CA would be loaded,
+	// installed as the only root, and never consulted - the operator believes
+	// they pinned to their CA while verifying nothing
+	dir := t.TempDir()
+	ca := filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(ca, []byte("placeholder"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Connect(&config.Profile{
+		URL:      "ldaps://127.0.0.1:1",
+		BaseDN:   "dc=e",
+		Insecure: true,
+		CAFile:   ca,
+	})
+	if err == nil {
+		t.Fatal("Connect accepted insecure together with ca_file")
+	}
+	if !strings.Contains(err.Error(), "contradictory") {
+		t.Errorf("error does not name the conflict: %v", err)
+	}
+	// the refusal must come before the dial, not from the unreachable address
+	if strings.Contains(err.Error(), "dial") {
+		t.Errorf("refused only at dial time: %v", err)
 	}
 }

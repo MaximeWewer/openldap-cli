@@ -94,7 +94,9 @@ used to be ignored and left the bind in cleartext.
 **Private CA.** When the directory's certificate is signed by a CA the host does
 not trust system-wide, point `ca_file` (or `LDAP_CA_FILE`) at a PEM bundle
 rather than reaching for `insecure: true`: verification stays on, against the
-anchor you chose. `tls export` writes that file.
+anchor you chose. `tls export` writes that file. Setting **both** is refused -
+`insecure` turns verification off outright, so the CA would be loaded and then
+never consulted, which looks like pinning and is not.
 
 **Secrets.** `LDAP_BIND_PW_FILE` and `LDAP_CONFIG_BIND_PW_FILE` read the password
 from a file (first line) instead of the environment - what you want for a Docker
