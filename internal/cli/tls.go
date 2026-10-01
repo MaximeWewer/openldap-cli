@@ -318,7 +318,69 @@ func writePEMFile(path string, certs []*x509.Certificate) (err error) {
 type tlsConfigResult struct {
 	DN       string            `json:"dn" yaml:"dn"`
 	Settings map[string]string `json:"settings" yaml:"settings"`
+	Findings []string          `json:"findings,omitempty" yaml:"findings,omitempty"`
 	Note     string            `json:"note" yaml:"note"`
+}
+
+// protocolMin maps an olcTLSProtocolMin value onto the version it means.
+// OpenLDAP writes the SSL/TLS record version: 3.1 is TLS 1.0, up to 3.4 for
+// TLS 1.3. Anything below 3.3 leaves a protocol RFC 8996 deprecated enabled.
+var protocolMin = map[string]struct {
+	name string
+	weak bool
+}{
+	"3.0": {"SSL 3.0", true},
+	"3.1": {"TLS 1.0", true},
+	"3.2": {"TLS 1.1", true},
+	"3.3": {"TLS 1.2", false},
+	"3.4": {"TLS 1.3", false},
+}
+
+// judge turns the settings into the handful of remarks worth making. It reads
+// the configuration only; `tls check` is what probes the server's behavior,
+// and behavior is what actually protects anyone.
+func judge(set map[string]string) []string {
+	var out []string
+
+	switch v, ok := set["olcTLSProtocolMin"]; {
+	case !ok || v == "":
+		out = append(out, "olcTLSProtocolMin is unset: the floor is whatever the TLS library defaults to, "+
+			"which changes with the library. Set 3.3 (TLS 1.2) to state it - `tls check` reports what is really accepted")
+	default:
+		if m, known := protocolMin[strings.TrimSpace(v)]; !known {
+			out = append(out, fmt.Sprintf("olcTLSProtocolMin %q is not a version this knows (3.0-3.4)", v))
+		} else if m.weak {
+			out = append(out, fmt.Sprintf("olcTLSProtocolMin %s allows %s, deprecated by RFC 8996: raise it to 3.3", v, m.name))
+		}
+	}
+
+	verify := strings.ToLower(strings.TrimSpace(set["olcTLSVerifyClient"]))
+	crl := strings.ToLower(strings.TrimSpace(set["olcTLSCRLCheck"]))
+	switch {
+	case verify == "" || verify == "never":
+		if set["olcTLSCertificateFile"] != "" {
+			out = append(out, "olcTLSVerifyClient is never: client certificates are not validated, "+
+				"so SASL EXTERNAL over ldaps:// cannot work (no external identity to bind as)")
+		}
+	case crl == "" || crl == "none":
+		out = append(out, fmt.Sprintf("olcTLSVerifyClient is %s but olcTLSCRLCheck is %s: "+
+			"client certificates are trusted without ever checking whether they were revoked",
+			verify, orNone(crl)))
+	}
+
+	if set["olcTLSCipherSuite"] != "" {
+		out = append(out, fmt.Sprintf("olcTLSCipherSuite is set (%q): its meaning depends on the TLS library "+
+			"slapd was built against, so judge it by what `tls check` observes rather than by reading it",
+			set["olcTLSCipherSuite"]))
+	}
+	return out
+}
+
+func orNone(s string) string {
+	if s == "" {
+		return "unset"
+	}
+	return s
 }
 
 func (r tlsConfigResult) Text() string {
@@ -331,6 +393,9 @@ func (r tlsConfigResult) Text() string {
 		if v, ok := r.Settings[k]; ok {
 			fmt.Fprintf(&b, "  %-28s %s\n", k+":", v)
 		}
+	}
+	for _, f := range r.Findings {
+		fmt.Fprintf(&b, "\n  ~ %s\n", f)
 	}
 	fmt.Fprintf(&b, "\n  %s", r.Note)
 	return b.String()
@@ -377,6 +442,7 @@ var tlsConfigCmd = &cobra.Command{
 		return out.Emit(tlsConfigResult{
 			DN:       e.DN,
 			Settings: settings,
+			Findings: judge(settings),
 			Note:     "these are paths on the server host; `tls export` is what reads the certificates themselves",
 		})
 	},
@@ -387,28 +453,35 @@ var tlsConfigCmd = &cobra.Command{
 var tlsCheckDays int
 
 type tlsCheckResult struct {
-	URL      string     `json:"url" yaml:"url"`
-	OK       bool       `json:"ok" yaml:"ok"`
-	Problems []string   `json:"problems,omitempty" yaml:"problems,omitempty"`
-	Chain    []certInfo `json:"chain" yaml:"chain"`
+	URL       string     `json:"url" yaml:"url"`
+	OK        bool       `json:"ok" yaml:"ok"`
+	Problems  []string   `json:"problems,omitempty" yaml:"problems,omitempty"`
+	Notes     []string   `json:"notes,omitempty" yaml:"notes,omitempty"`
+	Protocols []string   `json:"protocols_accepted" yaml:"protocols_accepted"`
+	Chain     []certInfo `json:"chain" yaml:"chain"`
 }
 
 func (r tlsCheckResult) Text() string {
+	var b strings.Builder
 	if r.OK {
-		var soonest = -1
+		soonest := -1
 		for _, c := range r.Chain {
 			if soonest < 0 || c.DaysLeft < soonest {
 				soonest = c.DaysLeft
 			}
 		}
-		return fmt.Sprintf("%s OK - chain valid, %d days before the first certificate expires", r.URL, soonest)
+		fmt.Fprintf(&b, "%s OK - chain valid, %s only, %d days before the first certificate expires",
+			r.URL, strings.Join(r.Protocols, "/"), soonest)
+	} else {
+		fmt.Fprintf(&b, "%s NOT OK", r.URL)
+		for _, p := range r.Problems {
+			fmt.Fprintf(&b, "\n  ! %s", p)
+		}
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s NOT OK\n", r.URL)
-	for _, p := range r.Problems {
-		fmt.Fprintf(&b, "  ! %s\n", p)
+	for _, n := range r.Notes {
+		fmt.Fprintf(&b, "\n  ~ %s", n)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return b.String()
 }
 
 var tlsCheckCmd = &cobra.Command{
@@ -483,6 +556,42 @@ var tlsCheckCmd = &cobra.Command{
 			} else {
 				res.Problems = append(res.Problems, "the chain does not validate "+chain.ServerName+": "+verr.Error())
 			}
+		}
+
+		// what the server ACCEPTS, not what its configuration claims: pin the
+		// client to one version at a time and see which handshakes complete
+		accepted, perr := tlsx.ProbeVersions(tlsx.Target{URL: cfg.URL, StartTLS: cfg.StartTLS, Timeout: cfg.Timeout},
+			[]uint16{tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13})
+		if perr != nil {
+			return perr
+		}
+		for _, v := range []uint16{tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13} {
+			if accepted[v] {
+				res.Protocols = append(res.Protocols, tlsx.VersionName(v))
+			}
+		}
+		for _, v := range tlsx.Obsolete {
+			if accepted[v] {
+				res.Problems = append(res.Problems, fmt.Sprintf(
+					"the server still accepts %s, deprecated by RFC 8996 - raise olcTLSProtocolMin to 3.3 (TLS 1.2)",
+					tlsx.VersionName(v)))
+			}
+		}
+
+		// revocation: a stapled answer is the only one a client gets for free
+		if status, serr := chain.StapleStatus(); serr != nil {
+			res.Problems = append(res.Problems, serr.Error())
+		} else if status == "revoked" {
+			res.Problems = append(res.Problems, "the stapled OCSP response says the server certificate is REVOKED")
+		} else if status != "" {
+			res.Notes = append(res.Notes, "stapled OCSP status: "+status)
+		}
+		if ocspServers, crlPoints, stapled := chain.Revocable(); !stapled && len(ocspServers) == 0 && len(crlPoints) == 0 {
+			// not a fault to fix today, so a note rather than a failure: it is a
+			// property of how the certificate was issued
+			res.Notes = append(res.Notes,
+				"the certificate names no OCSP responder and no CRL, and the server staples nothing: "+
+					"its revocation cannot be checked by any client")
 		}
 
 		res.OK = len(res.Problems) == 0

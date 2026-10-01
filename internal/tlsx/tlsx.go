@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
+	"golang.org/x/crypto/ocsp"
 )
 
 // Target names the endpoint to handshake with.
@@ -39,6 +40,9 @@ type Chain struct {
 	Version     uint16
 	CipherSuite uint16
 	Certs       []*x509.Certificate
+	// OCSPStaple is the revocation response the server volunteered during the
+	// handshake, empty when it stapled none.
+	OCSPStaple []byte
 }
 
 // Fetch completes a TLS handshake and returns the chain, without binding: the
@@ -90,6 +94,7 @@ func Fetch(t Target) (*Chain, error) {
 		Version:     state.Version,
 		CipherSuite: state.CipherSuite,
 		Certs:       state.PeerCertificates,
+		OCSPStaple:  state.OCSPResponse,
 	}, nil
 }
 
@@ -111,6 +116,94 @@ func hostOf(raw string) (string, error) {
 		return h, nil
 	}
 	return "", fmt.Errorf("no host in url %q", raw)
+}
+
+// Obsolete lists the TLS versions that no longer belong on a directory, oldest
+// first. 1.0 and 1.1 are deprecated by RFC 8996.
+var Obsolete = []uint16{tls.VersionTLS10, tls.VersionTLS11}
+
+// ProbeVersions reports, for each version asked about, whether the endpoint
+// completes a handshake with it.
+//
+// It pins MinVersion and MaxVersion to the same value, so the server has no
+// room to negotiate upward: a success means it genuinely accepts that version,
+// which is the only way to tell. Reading olcTLSProtocolMin would say what the
+// configuration intends; this says what the server does.
+func ProbeVersions(t Target, versions []uint16) (map[uint16]bool, error) {
+	host, err := hostOf(t.URL)
+	if err != nil {
+		return nil, err
+	}
+	timeout := t.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	out := make(map[uint16]bool, len(versions))
+	for _, v := range versions {
+		cfg := &tls.Config{
+			ServerName:         host,
+			InsecureSkipVerify: true, // #nosec G402 -- probing the protocol, not trusting the peer
+			MinVersion:         v,
+			MaxVersion:         v,
+		}
+		conn, derr := ldap.DialURL(t.URL,
+			ldap.DialWithTLSConfig(cfg),
+			ldap.DialWithDialer(&net.Dialer{Timeout: timeout}),
+		)
+		if derr != nil {
+			out[v] = false
+			continue
+		}
+		if t.StartTLS {
+			if serr := conn.StartTLS(cfg); serr != nil {
+				out[v] = false
+				_ = conn.Close()
+				continue
+			}
+		}
+		state, ok := conn.TLSConnectionState()
+		out[v] = ok && state.Version == v
+		_ = conn.Close()
+	}
+	return out, nil
+}
+
+// VersionName renders a TLS version the way an operator writes it.
+func VersionName(v uint16) string { return tls.VersionName(v) }
+
+// Revocable reports how, if at all, the leaf certificate could be checked for
+// revocation: the responders it names, and whether the server volunteered a
+// stapled answer. A certificate naming neither cannot be revoked in any way a
+// client can observe.
+func (c *Chain) Revocable() (ocspServers, crlPoints []string, stapled bool) {
+	if leaf := c.Leaf(); leaf != nil {
+		ocspServers, crlPoints = leaf.OCSPServer, leaf.CRLDistributionPoints
+	}
+	return ocspServers, crlPoints, len(c.OCSPStaple) > 0
+}
+
+// StapleStatus parses the stapled OCSP response. It returns "" when nothing was
+// stapled, and an error when something was but it cannot be read.
+func (c *Chain) StapleStatus() (string, error) {
+	if len(c.OCSPStaple) == 0 {
+		return "", nil
+	}
+	var issuer *x509.Certificate
+	if len(c.Certs) > 1 {
+		issuer = c.Certs[1]
+	}
+	res, err := ocsp.ParseResponseForCert(c.OCSPStaple, c.Leaf(), issuer)
+	if err != nil {
+		return "", fmt.Errorf("parse the stapled OCSP response: %w", err)
+	}
+	switch res.Status {
+	case ocsp.Good:
+		return "good", nil
+	case ocsp.Revoked:
+		return "revoked", nil
+	default:
+		return "unknown", nil
+	}
 }
 
 // Leaf is the server's own certificate.

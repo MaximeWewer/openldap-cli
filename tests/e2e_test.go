@@ -1289,6 +1289,39 @@ func TestCLI(t *testing.T) {
 			has(t, so, "client certificate")
 		})
 
+		// A verdict is only worth having if it changes when the server does, so
+		// weaken the server, see it caught, harden it, see it clear.
+		t.Run("check-catches-an-obsolete-protocol", func(t *testing.T) {
+			restart := func() { _ = exec.Command("docker", "restart", "openldap-test").Run(); time.Sleep(5 * time.Second) }
+			t.Cleanup(func() {
+				_, _, _ = try(root, rtPW, "config", "set", "cn=config", "olcTLSProtocolMin", "--force")
+				_, _, _ = try(root, rtPW, "config", "set", "cn=config", "olcTLSCipherSuite", "--force")
+				restart()
+			})
+
+			// a hardened server passes and names what it accepts
+			out := runEnv(t, []string{ldaps}, admin, adPW, "tls", "check", "--days", "30")
+			has(t, out, "TLS 1.2")
+			if strings.Contains(out, "TLS 1.0") {
+				t.Errorf("TLS 1.0 accepted out of the box:\n%s", out)
+			}
+
+			// now allow what RFC 8996 deprecates
+			run(t, root, rtPW, "config", "set", "cn=config", "olcTLSProtocolMin", "3.1", "--force")
+			run(t, root, rtPW, "config", "set", "cn=config", "olcTLSCipherSuite", "ALL:@SECLEVEL=0", "--force")
+			restart()
+
+			so, _, err := tryEnv([]string{ldaps}, admin, adPW, "tls", "check", "--days", "30")
+			if err == nil {
+				t.Error("tls check exited 0 against a server accepting TLS 1.0")
+			}
+			has(t, so, "TLS 1.0")
+			has(t, so, "RFC 8996")
+
+			// and the configuration reading agrees with the probe
+			has(t, run(t, admin, adPW, "tls", "config"), "raise it to 3.3")
+		})
+
 		t.Run("a-client-cert-without-its-key-is-refused", func(t *testing.T) {
 			certDir, _ := filepath.Abs("certs")
 			_, se, err := tryEnv([]string{ldaps, "LDAP_CLIENT_CERT=" + filepath.Join(certDir, "client.crt")},

@@ -384,8 +384,8 @@ credential is, so this works from a machine with no account yet.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tls show`                               | every certificate presented: its role in the chain, the names it covers, expiry, and the SHA-256 in `openssl x509 -fingerprint -sha256` format. The last line says whether the chain validates **on its own**, i.e. whether `export` is enough for a client |
 | `tls export [file] [--full]`             | PEM to `<file>`, or to stdout when none is named (so it pipes). Exports the **CA** certificates by default - what a client installs, and what keeps working when the server certificate is renewed. `--full` writes the whole chain, for pinning or an archive |
-| `tls check [--days N]`                   | **exits non-zero** when a certificate has expired, expires within `--days` (default 30), or the chain does not validate the host it serves - one line for a cron job or a monitoring probe. A profile `client_cert` is checked too: it is not in what the server presents, and letting it lapse locks you out just as hard |
-| `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces. It cannot export anything - that is `tls export`                                                                                            |
+| `tls check [--days N]`                   | **exits non-zero** when a certificate has expired, expires within `--days` (default 30), the chain does not validate the host it serves, or the server still accepts **TLS 1.0/1.1** (RFC 8996). A profile `client_cert` is checked too: it is not in what the server presents, and letting it lapse locks you out just as hard. One line for a cron job or a monitoring probe |
+| `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces, each with a remark when it deserves one. It cannot export anything - that is `tls export`                                                  |
 | `tls ca-list [--base DN]`                | CA certificates the **directory publishes** in the tree (`cACertificate`, RFC 4523 `pkiCA` or the older `certificationAuthority`) - a different source from the handshake, and one most directories simply do not use                                      |
 | `tls ca-export [file] [--base DN]`       | those, as PEM. What the organization publishes, carried over a connection only as trustworthy as the one you made - compare the fingerprints out of band                                                                                                 |
 
@@ -402,6 +402,22 @@ openldap-cli --profile prod tls check --days 30 || notify "LDAPS cert needs atte
 there is nothing to verify against yet, which is the whole point. Compare the
 printed SHA-256 against the server's own record, out of band, before installing
 it anywhere that matters.
+
+**Protocols are probed, not read.** `tls check` pins the client to one TLS
+version at a time and sees which handshakes complete, so it reports what the
+server *does*. `olcTLSProtocolMin` says what the configuration *intends*, and
+`olcTLSCipherSuite` means whatever the TLS library slapd was built against says
+it means - `tls config` reads both and remarks on them, but the probe is the
+evidence.
+
+**Revocation.** `tls check` reports the OCSP response the server staples, if
+any, and fails on a `revoked` one. It does **not** reach out to an OCSP
+responder or fetch a CRL: that is a call to a third party from a monitoring
+probe, which is its own problem. When the certificate names no responder and no
+CRL and nothing is stapled, it says so - revocation then cannot be checked by
+any client at all. Server-side, `tls config` flags the combination that reads
+as secure and is not: `olcTLSVerifyClient` on with `olcTLSCRLCheck` at `none`,
+i.e. client certificates trusted without ever asking whether they were revoked.
 
 **Two sources, one answer.** `tls export` reads the wire; `tls ca-export` reads
 the tree. A directory that publishes its CA should hand back the same anchor
