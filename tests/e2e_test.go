@@ -6,12 +6,22 @@
 package e2e
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 var binPath string
@@ -56,9 +66,15 @@ func env(bindDN, bindPW string) []string {
 
 // try runs the binary without failing the test (used for setup/cleanup).
 func try(bindDN, bindPW string, args ...string) (stdout, stderr string, err error) {
+	return tryEnv(nil, bindDN, bindPW, args...)
+}
+
+// tryEnv is try with extra environment appended, which overrides what env()
+// set: the TLS commands need a different LDAP_URL and a ca_file.
+func tryEnv(extra []string, bindDN, bindPW string, args ...string) (stdout, stderr string, err error) {
 	full := append([]string{"--config", "/nonexistent-e2e.yaml", "--log-level", "error"}, args...)
 	cmd := exec.Command(binPath, full...)
-	cmd.Env = env(bindDN, bindPW)
+	cmd.Env = append(env(bindDN, bindPW), extra...)
 	var so, se strings.Builder
 	cmd.Stdout, cmd.Stderr = &so, &se
 	err = cmd.Run()
@@ -69,6 +85,16 @@ func try(bindDN, bindPW string, args ...string) (stdout, stderr string, err erro
 func run(t *testing.T, bindDN, bindPW string, args ...string) string {
 	t.Helper()
 	so, se, err := try(bindDN, bindPW, args...)
+	if err != nil {
+		t.Fatalf("%v\n  exit: %v\n  stderr: %s", args, err, se)
+	}
+	return so
+}
+
+// runEnv is run with extra environment appended.
+func runEnv(t *testing.T, extra []string, bindDN, bindPW string, args ...string) string {
+	t.Helper()
+	so, se, err := tryEnv(extra, bindDN, bindPW, args...)
 	if err != nil {
 		t.Fatalf("%v\n  exit: %v\n  stderr: %s", args, err, se)
 	}
@@ -1086,6 +1112,96 @@ func TestCLI(t *testing.T) {
 		}
 	})
 
+	// The two sources of a trust anchor have to agree: what the server presents
+	// on the wire and what the directory publishes in the tree are the same CA,
+	// and either one must actually let a client verify the server. Anything
+	// weaker would pass while handing people a file that does not work.
+	t.Run("tls", func(t *testing.T) {
+		const ldaps = "LDAP_URL=ldaps://localhost:636"
+		if _, _, err := tryEnv([]string{ldaps}, admin, adPW, "tls", "show"); err != nil {
+			t.Skip("no LDAPS on :636 (bootstrap found no openssl?)")
+		}
+		dir := t.TempDir()
+
+		t.Run("show", func(t *testing.T) {
+			out := runEnv(t, []string{ldaps}, admin, adPW, "tls", "show")
+			has(t, out, "root CA")
+			has(t, out, "openldap-cli Test Root CA")
+			has(t, out, "sha256:")
+			// the chain carries its own root, so it validates unaided
+			has(t, out, "validates")
+		})
+
+		t.Run("export-ca-and-connect-verified", func(t *testing.T) {
+			ca := filepath.Join(dir, "ca.pem")
+			out := runEnv(t, []string{ldaps}, admin, adPW, "tls", "export", ca)
+			has(t, out, "wrote 1 certificate")
+
+			// only the CA, never the server certificate
+			pem, err := os.ReadFile(ca)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(string(pem), "BEGIN CERTIFICATE"); n != 1 {
+				t.Fatalf("exported %d certificates, want only the CA", n)
+			}
+			// the point of the whole feature: that file makes LDAPS verify
+			verified := runEnv(t, []string{ldaps, "LDAP_CA_FILE=" + ca}, admin, adPW, "whoami")
+			has(t, verified, "cn=admin")
+		})
+
+		t.Run("export-full-carries-the-server-cert", func(t *testing.T) {
+			chain := filepath.Join(dir, "chain.pem")
+			runEnv(t, []string{ldaps}, admin, adPW, "tls", "export", "--full", chain)
+			pem, err := os.ReadFile(chain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := strings.Count(string(pem), "BEGIN CERTIFICATE"); n != 2 {
+				t.Errorf("--full exported %d certificates, want the whole chain", n)
+			}
+		})
+
+		t.Run("an-unrelated-ca-is-still-refused", func(t *testing.T) {
+			// ca_file must constrain trust, not merely decorate it
+			bogus := filepath.Join(dir, "bogus.pem")
+			if err := os.WriteFile(bogus, unrelatedCA(t), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := tryEnv([]string{ldaps, "LDAP_CA_FILE=" + bogus}, admin, adPW, "whoami"); err == nil {
+				t.Error("LDAPS succeeded against a CA that signed nothing here")
+			}
+		})
+
+		// rootDN here: the seeded ACLs do not expose an entry sitting directly
+		// under the base to the regular admin, so anything less bypasses the
+		// command and tests the ACL instead.
+		t.Run("published-ca-matches-the-wire", func(t *testing.T) {
+			has(t, run(t, root, rtPW, "tls", "ca-list"), "cn=TestRootCA,dc=example,dc=org")
+
+			pub := filepath.Join(dir, "published.pem")
+			run(t, root, rtPW, "tls", "ca-export", pub)
+			wire := filepath.Join(dir, "wire.pem")
+			runEnv(t, []string{ldaps}, admin, adPW, "tls", "export", wire)
+
+			a, err := os.ReadFile(pub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(a, b) {
+				t.Error("the CA the directory publishes differs from the one the server presents")
+			}
+		})
+
+		t.Run("config-shows-the-server-side-paths", func(t *testing.T) {
+			has(t, run(t, admin, adPW, "tls", "config"), "olcTLSCACertificateFile")
+		})
+	})
+
 	t.Run("profile", func(t *testing.T) {
 		// profile commands read the (nonexistent) config file gracefully
 		_, _, _ = try(admin, adPW, "profile", "current")
@@ -1146,4 +1262,29 @@ func tmpFile(t *testing.T, content string) string {
 	}
 	f.Close()
 	return f.Name()
+}
+
+// unrelatedCA mints a self-signed CA that signed nothing in this directory. It
+// is generated rather than pinned in the source so the test carries no blob
+// that silently expires one day.
+func unrelatedCA(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Unrelated Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

@@ -36,11 +36,39 @@ if [[ $RESET -eq 1 ]]; then
   if [[ -d ./testdata ]]; then
     docker run --rm -v "$PWD/testdata:/d" busybox sh -c 'rm -rf /d/*' 2>/dev/null || true
   fi
-  rm -rf ./testdata ./seed/_combined.ldif ./init-config/_combined.ldif
+  rm -rf ./testdata ./seed/_combined.ldif ./init-config/_combined.ldif ./certs
 fi
 
 mkdir -p ./testdata/slapd.d ./testdata/openldap-data ./testdata/accesslog-data ./certs
 chmod -R 777 ./testdata   # let the container's ldap uid write into bind mounts
+
+# ---- TLS -----------------------------------------------------------------
+# A throwaway CA + server certificate so :636 really serves LDAPS and the `tls`
+# commands have something to read. Keys are world-readable and the CA is
+# self-signed on purpose: this instance is disposable, never a template.
+TLS=0
+if [[ -s ./certs/ca.crt && -s ./certs/server.crt && -s ./certs/server.key ]]; then
+  TLS=1
+  echo ">> certs already present, skipping generation"
+elif command -v openssl >/dev/null 2>&1; then
+  echo ">> generating a test CA + server certificate"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+    -keyout ./certs/ca.key -out ./certs/ca.crt \
+    -subj "/CN=openldap-cli Test Root CA/O=openldap-cli test" \
+    -addext "basicConstraints=critical,CA:TRUE" >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout ./certs/server.key -out ./certs/server.csr \
+    -subj "/CN=openldap/O=openldap-cli test" >/dev/null 2>&1
+  # the names a client may ask for: the compose hostname, and localhost from the host
+  printf 'subjectAltName=DNS:openldap,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' >./certs/ext.cnf
+  openssl x509 -req -in ./certs/server.csr -days 3650 \
+    -CA ./certs/ca.crt -CAkey ./certs/ca.key -CAcreateserial \
+    -extfile ./certs/ext.cnf -out ./certs/server.crt >/dev/null 2>&1
+  chmod 644 ./certs/ca.crt ./certs/server.crt ./certs/server.key
+  TLS=1
+else
+  echo ">> openssl not found: skipping TLS setup (:636 will not serve, `tls` tests will skip)" >&2
+fi
 
 if [[ -z "$(ls -A ./testdata/slapd.d 2>/dev/null)" ]]; then
   # This slapd build's slapadd does not expand `include:` schema directives, so
@@ -64,9 +92,16 @@ if [[ -z "$(ls -A ./testdata/slapd.d 2>/dev/null)" ]]; then
   } >"$combined"
   rm -rf "$schema_tmp"
 
+  # point cn=config at the certificates, inside the first record
+  if [[ $TLS -eq 1 ]]; then
+    grep -q '^olcArgsFile:' "$combined" || { echo "no olcArgsFile anchor in $combined" >&2; exit 1; }
+    sed -i '0,/^olcArgsFile:.*$/s||&\nolcTLSCACertificateFile: /etc/openldap/certs/ca.crt\nolcTLSCertificateFile: /etc/openldap/certs/server.crt\nolcTLSCertificateKeyFile: /etc/openldap/certs/server.key|' "$combined"
+  fi
+
   echo ">> slapadd cn=config (-n0)"
   docker run --rm --user "${LDAP_UID}:${LDAP_GID}" \
     -v "$PWD/init-config:/init-config:ro" \
+    -v "$PWD/certs:/etc/openldap/certs:ro" \
     -v "$PWD/testdata/slapd.d:/etc/openldap/slapd.d" \
     -v "$PWD/testdata/openldap-data:/var/lib/openldap/openldap-data" \
     -v "$PWD/testdata/accesslog-data:/var/lib/openldap/accesslog-data" \
@@ -76,6 +111,19 @@ if [[ -z "$(ls -A ./testdata/slapd.d 2>/dev/null)" ]]; then
   echo ">> slapadd seed data (-n1)"
   : >./seed/_combined.ldif
   for f in ./seed/0*.ldif; do cat "$f" >>./seed/_combined.ldif; echo >>./seed/_combined.ldif; done
+  # publish the CA in the tree as well (RFC 4523), so `tls ca-list` / `ca-export`
+  # have a directory-published source to read, next to the one on the wire
+  if [[ $TLS -eq 1 ]]; then
+    {
+      echo "dn: cn=TestRootCA,dc=example,dc=org"
+      echo "objectClass: top"
+      echo "objectClass: applicationProcess"
+      echo "objectClass: pkiCA"
+      echo "cn: TestRootCA"
+      echo "cACertificate;binary:: $(openssl x509 -in ./certs/ca.crt -outform DER | base64 -w0)"
+      echo
+    } >>./seed/_combined.ldif
+  fi
   docker run --rm --user "${LDAP_UID}:${LDAP_GID}" \
     -v "$PWD/seed:/seed:ro" \
     -v "$PWD/testdata/slapd.d:/etc/openldap/slapd.d:ro" \

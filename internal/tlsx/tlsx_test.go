@@ -288,3 +288,22 @@ func TestFetchRefusesAPlaintextEndpoint(t *testing.T) {
 		t.Errorf("error does not explain the problem: %v", err)
 	}
 }
+
+func TestParseDERReadsWhatLDAPReturns(t *testing.T) {
+	far := time.Now().Add(24 * time.Hour)
+	ca, _ := issue(t, "Published CA", true, nil, nil, far)
+
+	// a server hands back the DER bytes in the attribute value
+	got, err := ParseDER([]string{string(ca.Raw)})
+	if err != nil {
+		t.Fatalf("ParseDER: %v", err)
+	}
+	if len(got) != 1 || !got[0].Equal(ca) {
+		t.Fatalf("ParseDER did not round-trip the certificate")
+	}
+	// something that is not a certificate must be reported, not skipped: a
+	// silently shorter bundle is a trust store missing an anchor
+	if _, err := ParseDER([]string{"not der"}); err == nil {
+		t.Error("ParseDER accepted a value that is not a certificate")
+	}
+}

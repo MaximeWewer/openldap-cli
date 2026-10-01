@@ -46,6 +46,23 @@ func (e *Entry) Get(name string) string {
 // GetAll returns all values of name.
 func (e *Entry) GetAll(name string) []string { return e.attrs[strings.ToLower(name)] }
 
+// GetAllOpt returns the values of name whatever attribute options the server
+// attached to it. An attribute description is a type plus options (RFC 4512),
+// so a request for cACertificate can legitimately come back as
+// `cACertificate;binary`, which an exact lookup would miss entirely.
+func (e *Entry) GetAllOpt(name string) []string {
+	want := strings.ToLower(name)
+	if v, ok := e.attrs[want]; ok {
+		return v
+	}
+	for k, v := range e.attrs {
+		if base, _, found := strings.Cut(k, ";"); found && base == want {
+			return v
+		}
+	}
+	return nil
+}
+
 // Names returns the attribute names in server order.
 func (e *Entry) Names() []string { return e.names }
 

@@ -104,3 +104,25 @@ func TestCAPoolRejectsWhatIsNotATrustAnchor(t *testing.T) {
 		t.Error("caPool accepted a missing file")
 	}
 }
+
+func TestGetAllOptIgnoresAttributeOptions(t *testing.T) {
+	// servers answer a cACertificate request as cACertificate;binary, which an
+	// exact lookup misses - the certificate then reads as simply absent
+	e := newEntry(&ldap.Entry{
+		DN: "cn=ca,dc=e",
+		Attributes: []*ldap.EntryAttribute{
+			{Name: "cACertificate;binary", Values: []string{"der-bytes"}},
+			{Name: "cn", Values: []string{"ca"}},
+		},
+	})
+	if got := e.GetAllOpt("cACertificate"); len(got) != 1 || got[0] != "der-bytes" {
+		t.Errorf("GetAllOpt(cACertificate) = %v, want the ;binary values", got)
+	}
+	// an exact match still wins, and an absent attribute stays absent
+	if got := e.GetAllOpt("cn"); len(got) != 1 || got[0] != "ca" {
+		t.Errorf("GetAllOpt(cn) = %v", got)
+	}
+	if got := e.GetAllOpt("userCertificate"); got != nil {
+		t.Errorf("GetAllOpt invented values: %v", got)
+	}
+}

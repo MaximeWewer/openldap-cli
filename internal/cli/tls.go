@@ -388,11 +388,204 @@ var tlsConfigCmd = &cobra.Command{
 	},
 }
 
+// ---- published CAs (RFC 4523) -------------------------------------------
+
+// A directory can publish its CA certificates as entries holding
+// cACertificate, which is a different source from the handshake: it answers
+// "what does this organization publish" rather than "what does this server
+// present", and carries no chain, no cipher and no hostname to check against.
+// Hence its own pair of commands rather than a flag on show/export.
+
+var tlsCABase string
+
+// publishedCAs searches for entries holding cACertificate and parses them.
+func publishedCAs() ([]publishedCA, error) {
+	cli, err := connect()
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+
+	base := strings.TrimSpace(tlsCABase)
+	if base == "" {
+		base = cli.Config().BaseDN
+	}
+	// a presence filter, not an objectClass one: pkiCA (RFC 4523) and the older
+	// certificationAuthority both carry the attribute, and so do schemas that
+	// use neither. Ask for the ;binary form, which is how it comes back.
+	entries, err := searchAll(cli, base, "(cACertificate=*)",
+		[]string{"cACertificate;binary", "cACertificate", "cn"})
+	if err != nil {
+		return nil, fmt.Errorf("search published CAs under %s: %w", base, err)
+	}
+
+	var out []publishedCA
+	for _, e := range entries {
+		vals := e.GetAllOpt("cACertificate")
+		if len(vals) == 0 {
+			continue
+		}
+		certs, perr := tlsx.ParseDER(vals)
+		if perr != nil {
+			return nil, fmt.Errorf("%s: %w", e.DN, perr)
+		}
+		out = append(out, publishedCA{DN: e.DN, Certs: certs})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no entry under %s publishes a cACertificate\n"+
+			"  This directory does not advertise its CA in the tree; read it off the\n"+
+			"  wire with `tls export` instead", base)
+	}
+	return out, nil
+}
+
+type publishedCA struct {
+	DN    string
+	Certs []*x509.Certificate
+}
+
+type tlsCAListResult struct {
+	Base    string             `json:"base" yaml:"base"`
+	Entries []tlsCAEntryResult `json:"entries" yaml:"entries"`
+}
+
+type tlsCAEntryResult struct {
+	DN           string     `json:"dn" yaml:"dn"`
+	Certificates []certInfo `json:"certificates" yaml:"certificates"`
+}
+
+func (r tlsCAListResult) Text() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "published CA certificates under %s\n", r.Base)
+	for _, e := range r.Entries {
+		fmt.Fprintf(&b, "\n  %s\n", e.DN)
+		for _, c := range e.Certificates {
+			fmt.Fprintf(&b, "      subject: %s\n", c.Subject)
+			fmt.Fprintf(&b, "      issuer:  %s\n", c.Issuer)
+			exp := fmt.Sprintf("%s (%d days left)", c.NotAfter, c.DaysLeft)
+			if c.Expired {
+				exp = c.NotAfter + "  EXPIRED"
+			}
+			fmt.Fprintf(&b, "      expires: %s\n", exp)
+			fmt.Fprintf(&b, "      sha256:  %s\n", c.Fingerprint)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// describePublished renders certificates that came out of the tree. They have
+// no position in a chain, so the role is read off the certificate alone.
+func describePublished(certs []*x509.Certificate) []certInfo {
+	now := time.Now()
+	out := make([]certInfo, 0, len(certs))
+	for i, c := range certs {
+		expired, days := tlsx.Expiry(c, now)
+		kind := "CA"
+		switch {
+		case tlsx.IsSelfSigned(c):
+			kind = "root CA"
+		case c.IsCA:
+			kind = "intermediate CA"
+		case !c.IsCA:
+			kind = "not a CA certificate"
+		}
+		out = append(out, certInfo{
+			Position:    i,
+			Role:        kind,
+			Subject:     c.Subject.String(),
+			Issuer:      c.Issuer.String(),
+			SANs:        tlsx.SANs(c),
+			NotAfter:    c.NotAfter.UTC().Format(time.RFC3339),
+			DaysLeft:    days,
+			Expired:     expired,
+			Fingerprint: tlsx.Fingerprint(c),
+		})
+	}
+	return out
+}
+
+var tlsCAListCmd = &cobra.Command{
+	Use:   "ca-list",
+	Short: "List the CA certificates the directory publishes (cACertificate)",
+	Long: "Some directories publish their CA in the tree, as entries carrying\n" +
+		"cACertificate (RFC 4523, objectClass pkiCA or the older\n" +
+		"certificationAuthority). This finds them and describes what they hold.\n\n" +
+		"That is a different source from `tls show`: it answers what the\n" +
+		"organization publishes, not what one server presents, so there is no chain\n" +
+		"and nothing to validate a hostname against. Most directories publish\n" +
+		"nothing here - that is not a fault, just read the certificate off the wire\n" +
+		"with `tls export`.",
+	Args:    cobra.NoArgs,
+	Example: "  openldap-cli --profile prod tls ca-list --base ou=pki,dc=example,dc=org",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cas, err := publishedCAs()
+		if err != nil {
+			return err
+		}
+		res := tlsCAListResult{Base: tlsCABase}
+		if res.Base == "" {
+			cfg, cerr := loadConfig()
+			if cerr != nil {
+				return cerr
+			}
+			res.Base = cfg.BaseDN
+		}
+		for _, c := range cas {
+			res.Entries = append(res.Entries, tlsCAEntryResult{DN: c.DN, Certificates: describePublished(c.Certs)})
+		}
+		return out.Emit(res)
+	},
+}
+
+var tlsCAExportCmd = &cobra.Command{
+	Use:   "ca-export [file]",
+	Short: "Export the CA certificates the directory publishes, as PEM",
+	Long: "Writes every cACertificate found in the tree as PEM - to <file>, or to\n" +
+		"stdout when no file is named.\n\n" +
+		"Unlike `tls export` this does not read the wire, so what comes out is what\n" +
+		"the directory says its CA is, carried over an LDAP connection that is only\n" +
+		"as trustworthy as the one you made. Compare the fingerprints out of band\n" +
+		"before installing them.",
+	Args: cobra.MaximumNArgs(1),
+	Example: "  openldap-cli --profile prod tls ca-export pki-cas.pem\n" +
+		"  openldap-cli --profile prod tls ca-export --base ou=pki,dc=example,dc=org",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		cas, err := publishedCAs()
+		if err != nil {
+			return err
+		}
+		var certs []*x509.Certificate
+		for _, c := range cas {
+			certs = append(certs, c.Certs...)
+		}
+
+		if len(args) == 0 || args[0] == "-" {
+			if err := tlsx.WritePEM(os.Stdout, certs); err != nil {
+				return err
+			}
+			log.Warn().Msg("published by the directory, not read off the wire; compare the fingerprints out of band")
+			return nil
+		}
+		if err := writePEMFile(args[0], certs); err != nil {
+			return err
+		}
+		log.Debug().Str("file", args[0]).Int("certs", len(certs)).Msg("published CAs exported")
+		return out.Emit(tlsExportResult{
+			File:         args[0],
+			Certificates: describePublished(certs),
+			Advice:       "these come from the directory tree, not from the TLS handshake",
+		})
+	},
+}
+
 func init() {
 	tlsExportCmd.Flags().BoolVar(&tlsExportCAOnly, "ca-only", false,
 		"export only the CA certificates (the default)")
 	tlsExportCmd.Flags().BoolVar(&tlsExportFull, "full", false,
 		"export the whole chain, server certificate included")
-	tlsCmd.AddCommand(tlsShowCmd, tlsExportCmd, tlsConfigCmd)
+	for _, c := range []*cobra.Command{tlsCAListCmd, tlsCAExportCmd} {
+		c.Flags().StringVar(&tlsCABase, "base", "", "search base for published CAs (default: the profile's base_dn)")
+	}
+	tlsCmd.AddCommand(tlsShowCmd, tlsExportCmd, tlsConfigCmd, tlsCAListCmd, tlsCAExportCmd)
 	rootCmd.AddCommand(tlsCmd)
 }

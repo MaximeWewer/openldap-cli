@@ -24,6 +24,22 @@ then `docker compose up -d`.
 | Bind PW | `adminpassword`                                          |
 | GUI     | http://localhost:8080                                    |
 
+## TLS
+
+`bootstrap.sh` mints a throwaway CA and server certificate into `certs/` (needs
+`openssl` on the host; without it the step is skipped and `:636` stays shut),
+points `cn=config` at them, and publishes the CA in the tree as
+`cn=TestRootCA,dc=example,dc=org` so both certificate sources - the handshake
+and `cACertificate` - have something to return.
+
+Keys are world-readable and the CA is self-signed on purpose. This instance is
+disposable; none of it is a template for anything real.
+
+```bash
+openldap-cli --profile test-root tls show      # over ldaps://localhost:636
+openldap-cli --profile test-root tls ca-list   # the one published in the tree
+```
+
 ## Seed
 
 `ou=users` (admin, user1.name, user2.name), `ou=groups` (admin, demo),

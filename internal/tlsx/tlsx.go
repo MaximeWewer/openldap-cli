@@ -229,6 +229,23 @@ func WritePEM(w io.Writer, certs []*x509.Certificate) error {
 	return nil
 }
 
+// ParseDER turns raw certificate values - as an LDAP server returns
+// cACertificate;binary, i.e. DER, one certificate per value - into parsed
+// certificates. A value that is not a certificate is reported rather than
+// skipped: an operator exporting a trust anchor needs to know the directory
+// holds something it should not.
+func ParseDER(values []string) ([]*x509.Certificate, error) {
+	out := make([]*x509.Certificate, 0, len(values))
+	for i, v := range values {
+		cert, err := x509.ParseCertificate([]byte(v))
+		if err != nil {
+			return nil, fmt.Errorf("value %d is not a DER certificate: %w", i, err)
+		}
+		out = append(out, cert)
+	}
+	return out, nil
+}
+
 // Expiry describes how a certificate sits against a moment in time.
 func Expiry(cert *x509.Certificate, now time.Time) (expired bool, daysLeft int) {
 	if now.After(cert.NotAfter) {

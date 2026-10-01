@@ -52,6 +52,7 @@ make unit         # pure unit tests (no server): acl, dn, domain, humanize,
                   # ldaptime, ldif, limits, overlay, pwd, schema, syncrepl, usercsv
 make integration  # ldapx façade vs the test LDAP - run `make test-up` first
 make e2e          # build the binary + drive every command group end-to-end
+                  # (incl. LDAPS: bootstrap mints a throwaway CA, see tests/)
 make lint         # golangci-lint (~23 linters; config in .golangci.yml)
 make security     # gosec
 make vuln         # govulncheck - CVEs in dependencies this binary can reach
@@ -334,6 +335,8 @@ credential is, so this works from a machine with no account yet.
 | `tls show`                               | every certificate presented: its role in the chain, the names it covers, expiry, and the SHA-256 in `openssl x509 -fingerprint -sha256` format. The last line says whether the chain validates **on its own**, i.e. whether `export` is enough for a client |
 | `tls export [file] [--full]`             | PEM to `<file>`, or to stdout when none is named (so it pipes). Exports the **CA** certificates by default - what a client installs, and what keeps working when the server certificate is renewed. `--full` writes the whole chain, for pinning or an archive |
 | `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces. It cannot export anything - that is `tls export`                                                                                            |
+| `tls ca-list [--base DN]`                | CA certificates the **directory publishes** in the tree (`cACertificate`, RFC 4523 `pkiCA` or the older `certificationAuthority`) - a different source from the handshake, and one most directories simply do not use                                      |
+| `tls ca-export [file] [--base DN]`       | those, as PEM. What the organization publishes, carried over a connection only as trustworthy as the one you made - compare the fingerprints out of band                                                                                                 |
 
 ```bash
 # hand a client the trust anchor it needs
@@ -346,6 +349,11 @@ LDAP_CA_FILE=ca.pem openldap-cli --profile prod whoami
 there is nothing to verify against yet, which is the whole point. Compare the
 printed SHA-256 against the server's own record, out of band, before installing
 it anywhere that matters.
+
+**Two sources, one answer.** `tls export` reads the wire; `tls ca-export` reads
+the tree. A directory that publishes its CA should hand back the same anchor
+either way, and the e2e suite asserts exactly that. Most directories publish
+nothing, which is not a fault - use `tls export`.
 
 **A missing root is normal.** A server MAY omit the root CA from the chain
 (RFC 8446 s4.4.2), and most do when the certificate comes from a corporate or
