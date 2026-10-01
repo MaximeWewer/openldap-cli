@@ -27,17 +27,20 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  # Optional GUI — handy while developing the CLI. Comment out if not needed.
+  # Optional GUI - handy while developing the CLI, never required. It sits behind
+  # the `gui` profile so a busy port cannot take the LDAP server down with it:
+  #   docker compose --profile gui up -d        (or: PHPLDAPADMIN_PORT=8081 ...)
   phpldapadmin:
+    profiles: [gui]
     image: phpldapadmin/phpldapadmin:2.3.11
     container_name: phpldapadmin-test
     hostname: phpldapadmin
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${PHPLDAPADMIN_PORT:-8080}:8080"
     environment:
       - APP_TIMEZONE=Europe/Paris
-      - APP_URL=http://localhost:8080
+      - APP_URL=http://localhost:${PHPLDAPADMIN_PORT:-8080}
       - LDAP_HOST=openldap
       - LDAP_CONNECTION=ldap
       - LDAP_PORT=389

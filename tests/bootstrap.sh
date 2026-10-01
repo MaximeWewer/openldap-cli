@@ -47,7 +47,7 @@ chmod -R 777 ./testdata   # let the container's ldap uid write into bind mounts
 # commands have something to read. Keys are world-readable and the CA is
 # self-signed on purpose: this instance is disposable, never a template.
 TLS=0
-if [[ -s ./certs/ca.crt && -s ./certs/server.crt && -s ./certs/server.key ]]; then
+if [[ -s ./certs/ca.crt && -s ./certs/server.crt && -s ./certs/server.key && -s ./certs/client.crt ]]; then
   TLS=1
   echo ">> certs already present, skipping generation"
 elif command -v openssl >/dev/null 2>&1; then
@@ -64,7 +64,15 @@ elif command -v openssl >/dev/null 2>&1; then
   openssl x509 -req -in ./certs/server.csr -days 3650 \
     -CA ./certs/ca.crt -CAkey ./certs/ca.key -CAcreateserial \
     -extfile ./certs/ext.cnf -out ./certs/server.crt >/dev/null 2>&1
-  chmod 644 ./certs/ca.crt ./certs/server.crt ./certs/server.key
+  # a client certificate too, so mutual TLS (client_cert/client_key) is testable
+  openssl req -newkey rsa:2048 -nodes \
+    -keyout ./certs/client.key -out ./certs/client.csr \
+    -subj "/CN=e2e.client/O=openldap-cli test" >/dev/null 2>&1
+  printf 'extendedKeyUsage=clientAuth\n' >./certs/client-ext.cnf
+  openssl x509 -req -in ./certs/client.csr -days 3650 \
+    -CA ./certs/ca.crt -CAkey ./certs/ca.key -CAcreateserial \
+    -extfile ./certs/client-ext.cnf -out ./certs/client.crt >/dev/null 2>&1
+  chmod 644 ./certs/ca.crt ./certs/server.crt ./certs/server.key ./certs/client.crt ./certs/client.key
   TLS=1
 else
   echo ">> openssl not found: skipping TLS setup (:636 will not serve, `tls` tests will skip)" >&2
@@ -135,8 +143,18 @@ else
   echo ">> data/slapd.d already populated, skipping slapadd (use --reset to rebuild)"
 fi
 
-echo ">> starting containers"
-docker compose up -d
+echo ">> starting the LDAP server"
+docker compose up -d openldap
+
+# The GUI is a convenience and must never be able to fail the bootstrap: its
+# port is the one most likely to be taken on a developer machine, and losing a
+# web UI is no reason to leave the directory unstarted.
+GUI_PORT="${PHPLDAPADMIN_PORT:-8080}"
+if docker compose --profile gui up -d phpldapadmin >/dev/null 2>&1; then
+  GUI="http://localhost:${GUI_PORT}  (admin / adminpassword)"
+else
+  GUI="not started - port ${GUI_PORT} busy? retry with PHPLDAPADMIN_PORT=8081 $0"
+fi
 
 echo -n ">> waiting for ldap://localhost:389 "
 for _ in $(seq 1 60); do
@@ -149,7 +167,7 @@ for _ in $(seq 1 60); do
     echo "  Base DN  dc=example,dc=org"
     echo "  Bind DN  cn=admin,ou=users,dc=example,dc=org"
     echo "  Bind PW  adminpassword"
-    echo "  GUI      http://localhost:8080  (admin / adminpassword)"
+    echo "  GUI      ${GUI}"
     echo
     echo "Try:  openldap-cli --profile test user add toto.titi"
     exit 0

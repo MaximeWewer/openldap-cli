@@ -33,6 +33,12 @@ type Profile struct {
 	Insecure   bool   `yaml:"insecure"`    // skip TLS cert verification (dev only)
 	CAFile     string `yaml:"ca_file"`     // PEM trust anchor, e.g. from `tls export`
 
+	// ClientCert/ClientKey present a certificate to the server (mutual TLS).
+	// With sasl_external this is what authenticates over ldaps://, the way
+	// peer credentials do over ldapi://.
+	ClientCert string `yaml:"client_cert"`
+	ClientKey  string `yaml:"client_key"`
+
 	// SASLExternal binds via SASL/EXTERNAL instead of a simple bind — the
 	// identity comes from the transport (Unix-socket peer creds over ldapi://,
 	// or a TLS client cert). bind_dn/bind_pw are then ignored. Typical use: run
@@ -183,6 +189,8 @@ func applyEnv(p *Profile) error {
 	envStr(&p.PolicyOU, "LDAP_POLICY_OU")
 	envStr(&p.MailDomain, "LDAP_MAIL_DOMAIN")
 	envStr(&p.CAFile, "LDAP_CA_FILE")
+	envStr(&p.ClientCert, "LDAP_CLIENT_CERT")
+	envStr(&p.ClientKey, "LDAP_CLIENT_KEY")
 	if v, ok := os.LookupEnv("LDAP_TIMEOUT"); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {

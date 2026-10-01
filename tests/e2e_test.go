@@ -1200,6 +1200,63 @@ func TestCLI(t *testing.T) {
 		t.Run("config-shows-the-server-side-paths", func(t *testing.T) {
 			has(t, run(t, admin, adPW, "tls", "config"), "olcTLSCACertificateFile")
 		})
+
+		t.Run("check-passes-and-fails-on-the-threshold", func(t *testing.T) {
+			has(t, runEnv(t, []string{ldaps}, admin, adPW, "tls", "check", "--days", "30"), "OK")
+
+			// a probe is only worth running if it can fail: a threshold beyond
+			// the certificate's life must exit non-zero, not merely print
+			so, _, err := tryEnv([]string{ldaps}, admin, adPW, "tls", "check", "--days", "99999")
+			if err == nil {
+				t.Error("tls check exited 0 with every certificate inside the threshold")
+			}
+			has(t, so, "NOT OK")
+		})
+
+		// Mutual TLS, proved the only way that means anything: make the server
+		// demand a client certificate, then show the connection fails without
+		// one and succeeds with it.
+		t.Run("client-cert-is-really-presented", func(t *testing.T) {
+			certDir, err := filepath.Abs("certs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, serr := os.Stat(filepath.Join(certDir, "client.crt")); serr != nil {
+				t.Skip("no client certificate in tests/certs")
+			}
+			ca := "LDAP_CA_FILE=" + filepath.Join(certDir, "ca.crt")
+
+			run(t, root, rtPW, "config", "set", "cn=config", "olcTLSVerifyClient", "demand", "--force")
+			t.Cleanup(func() {
+				_, _, _ = try(root, rtPW, "config", "set", "cn=config", "olcTLSVerifyClient", "--force")
+				_ = exec.Command("docker", "restart", "openldap-test").Run()
+				time.Sleep(5 * time.Second)
+			})
+			if out, err := exec.Command("docker", "restart", "openldap-test").CombinedOutput(); err != nil {
+				t.Skipf("cannot restart the server to apply olcTLSVerifyClient: %v %s", err, out)
+			}
+			time.Sleep(5 * time.Second)
+
+			if _, _, err := tryEnv([]string{ldaps, ca}, admin, adPW, "whoami"); err == nil {
+				t.Error("the server accepted a connection with no client certificate while demanding one")
+			}
+			with := []string{
+				ldaps, ca,
+				"LDAP_CLIENT_CERT=" + filepath.Join(certDir, "client.crt"),
+				"LDAP_CLIENT_KEY=" + filepath.Join(certDir, "client.key"),
+			}
+			has(t, runEnv(t, with, admin, adPW, "whoami"), "cn=admin")
+		})
+
+		t.Run("a-client-cert-without-its-key-is-refused", func(t *testing.T) {
+			certDir, _ := filepath.Abs("certs")
+			_, se, err := tryEnv([]string{ldaps, "LDAP_CLIENT_CERT=" + filepath.Join(certDir, "client.crt")},
+				admin, adPW, "whoami")
+			if err == nil {
+				t.Fatal("a certificate with no key was accepted")
+			}
+			has(t, se, "go together")
+		})
 	})
 
 	t.Run("profile", func(t *testing.T) {

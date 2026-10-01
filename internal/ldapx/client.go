@@ -59,6 +59,19 @@ func Connect(p *config.Profile) (*Client, error) {
 		}
 		tlsCfg.RootCAs = pool
 	}
+	// mutual TLS: present a certificate the server can map to an identity. With
+	// sasl_external this is what authenticates over ldaps://, the way peer
+	// credentials do over ldapi:// - and it needs no stored password.
+	if p.ClientCert != "" || p.ClientKey != "" {
+		if p.ClientCert == "" || p.ClientKey == "" {
+			return nil, errors.New("client_cert and client_key go together: a certificate without its key proves nothing")
+		}
+		pair, cerr := tls.LoadX509KeyPair(p.ClientCert, p.ClientKey)
+		if cerr != nil {
+			return nil, fmt.Errorf("load client certificate: %w", cerr)
+		}
+		tlsCfg.Certificates = []tls.Certificate{pair}
+	}
 
 	// bound the dial and every later operation: without this a server that
 	// accepts the connection and then goes quiet hangs the CLI indefinitely,

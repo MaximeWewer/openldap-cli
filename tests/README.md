@@ -32,6 +32,9 @@ points `cn=config` at them, and publishes the CA in the tree as
 `cn=TestRootCA,dc=example,dc=org` so both certificate sources - the handshake
 and `cACertificate` - have something to return.
 
+A client certificate (`certs/client.crt` + `.key`, signed by the same CA) comes
+with it, so mutual TLS - `client_cert`/`client_key` - is exercisable too.
+
 Keys are world-readable and the CA is self-signed on purpose. This instance is
 disposable; none of it is a template for anything real.
 

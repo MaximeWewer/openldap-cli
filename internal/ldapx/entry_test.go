@@ -156,3 +156,23 @@ func TestConnectRefusesInsecureTogetherWithCAFile(t *testing.T) {
 		t.Errorf("refused only at dial time: %v", err)
 	}
 }
+
+func TestConnectRequiresBothHalvesOfAClientCertificate(t *testing.T) {
+	// a certificate with no key proves nothing, and a key with no certificate
+	// is never sent: either half alone is a misconfiguration, not a default
+	for _, p := range []*config.Profile{
+		{URL: "ldaps://127.0.0.1:1", BaseDN: "dc=e", ClientCert: "/x.crt"},
+		{URL: "ldaps://127.0.0.1:1", BaseDN: "dc=e", ClientKey: "/x.key"},
+	} {
+		_, err := Connect(p)
+		if err == nil {
+			t.Fatalf("Connect accepted a half-configured client certificate: %+v", p)
+		}
+		if !strings.Contains(err.Error(), "go together") {
+			t.Errorf("error does not name the problem: %v", err)
+		}
+		if strings.Contains(err.Error(), "dial") {
+			t.Errorf("refused only at dial time: %v", err)
+		}
+	}
+}

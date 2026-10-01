@@ -165,10 +165,7 @@ var tlsShowCmd = &cobra.Command{
 
 // ---- export -------------------------------------------------------------
 
-var (
-	tlsExportCAOnly bool
-	tlsExportFull   bool
-)
+var tlsExportFull bool
 
 type tlsExportResult struct {
 	File         string     `json:"file,omitempty" yaml:"file,omitempty"`
@@ -214,9 +211,6 @@ var tlsExportCmd = &cobra.Command{
 		"  # no file: PEM on stdout\n" +
 		"  openldap-cli --profile prod tls export | sudo tee /usr/local/share/ca-certificates/ldap.crt",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if tlsExportCAOnly && tlsExportFull {
-			return fmt.Errorf("--ca-only and --full are mutually exclusive")
-		}
 		chain, _, err := fetchChain()
 		if err != nil {
 			return err
@@ -385,6 +379,90 @@ var tlsConfigCmd = &cobra.Command{
 			Settings: settings,
 			Note:     "these are paths on the server host; `tls export` is what reads the certificates themselves",
 		})
+	},
+}
+
+// ---- check --------------------------------------------------------------
+
+var tlsCheckDays int
+
+type tlsCheckResult struct {
+	URL      string     `json:"url" yaml:"url"`
+	OK       bool       `json:"ok" yaml:"ok"`
+	Problems []string   `json:"problems,omitempty" yaml:"problems,omitempty"`
+	Chain    []certInfo `json:"chain" yaml:"chain"`
+}
+
+func (r tlsCheckResult) Text() string {
+	if r.OK {
+		var soonest = -1
+		for _, c := range r.Chain {
+			if soonest < 0 || c.DaysLeft < soonest {
+				soonest = c.DaysLeft
+			}
+		}
+		return fmt.Sprintf("%s OK - chain valid, %d days before the first certificate expires", r.URL, soonest)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s NOT OK\n", r.URL)
+	for _, p := range r.Problems {
+		fmt.Fprintf(&b, "  ! %s\n", p)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+var tlsCheckCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Fail when the server's certificate is expiring or does not validate",
+	Long: "One command for a cron job or a monitoring probe: it exits non-zero when\n" +
+		"any certificate in the chain has expired or expires within --days, or when\n" +
+		"the chain does not validate the hostname it is serving.\n\n" +
+		"It verifies against the chain the server itself presents, so it catches the\n" +
+		"renewal nobody noticed - not whether this particular host happens to trust\n" +
+		"the CA. Point `ca_file` at your anchor and the usual commands do the rest.",
+	Args: cobra.NoArgs,
+	Example: "  openldap-cli --profile prod tls check --days 30\n" +
+		"  # in cron: mail only when it has something to say\n" +
+		"  openldap-cli --profile prod tls check --days 30 || echo 'LDAPS cert needs attention'",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		chain, url, err := fetchChain()
+		if err != nil {
+			return err
+		}
+		res := tlsCheckResult{URL: url, Chain: describe(chain), OK: true}
+
+		now := time.Now()
+		for i, c := range chain.Certs {
+			expired, days := tlsx.Expiry(c, now)
+			switch {
+			case expired:
+				res.Problems = append(res.Problems,
+					fmt.Sprintf("%s (%s) EXPIRED on %s", role(c, i), c.Subject.String(), c.NotAfter.UTC().Format(time.RFC3339)))
+			case days < tlsCheckDays:
+				res.Problems = append(res.Problems,
+					fmt.Sprintf("%s (%s) expires in %d days, on %s", role(c, i), c.Subject.String(), days, c.NotAfter.UTC().Format(time.RFC3339)))
+			}
+		}
+		if verr := chain.Verify(); verr != nil {
+			// a chain missing its root is not a fault of the server: say what it
+			// is rather than reporting a renewal problem that does not exist
+			if chain.Root() == nil {
+				res.Problems = append(res.Problems,
+					"the chain does not carry its root, so it cannot be validated from the wire alone: "+verr.Error())
+			} else {
+				res.Problems = append(res.Problems, "the chain does not validate "+chain.ServerName+": "+verr.Error())
+			}
+		}
+
+		res.OK = len(res.Problems) == 0
+		if err := out.Emit(res); err != nil {
+			return err
+		}
+		if !res.OK {
+			// the report is already on stdout; the exit status is what a probe reads
+			return fmt.Errorf("%d problem(s) with the certificate on %s", len(res.Problems), url)
+		}
+		return nil
 	},
 }
 
@@ -577,13 +655,12 @@ var tlsCAExportCmd = &cobra.Command{
 }
 
 func init() {
-	tlsExportCmd.Flags().BoolVar(&tlsExportCAOnly, "ca-only", false,
-		"export only the CA certificates (the default)")
 	tlsExportCmd.Flags().BoolVar(&tlsExportFull, "full", false,
 		"export the whole chain, server certificate included")
 	for _, c := range []*cobra.Command{tlsCAListCmd, tlsCAExportCmd} {
 		c.Flags().StringVar(&tlsCABase, "base", "", "search base for published CAs (default: the profile's base_dn)")
 	}
-	tlsCmd.AddCommand(tlsShowCmd, tlsExportCmd, tlsConfigCmd, tlsCAListCmd, tlsCAExportCmd)
+	tlsCheckCmd.Flags().IntVar(&tlsCheckDays, "days", 30, "fail when a certificate expires within this many days")
+	tlsCmd.AddCommand(tlsShowCmd, tlsExportCmd, tlsCheckCmd, tlsConfigCmd, tlsCAListCmd, tlsCAExportCmd)
 	rootCmd.AddCommand(tlsCmd)
 }

@@ -77,6 +77,8 @@ profiles:
     policy_ou: ou=policies
     mail_domain: example.org
     ca_file: /etc/ssl/certs/ldap-ca.pem            # private CA (see `tls export`)
+    # client_cert: /etc/ssl/certs/ldap-client.pem  # mutual TLS; pairs with
+    # client_key:  /etc/ssl/private/ldap-client.key  sasl_external over ldaps://
     timeout: 2m                                    # per-operation cap (default 2m)
     # second bind for cn=config writes (svc ACL, ops reads):
     config_bind_dn: cn=adminconfig,cn=config
@@ -86,7 +88,8 @@ profiles:
 Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 `LDAP_USER_OU`, `LDAP_GROUP_OU`, `LDAP_POLICY_OU`, `LDAP_MAIL_DOMAIN`,
 `LDAP_CONFIG_BIND_DN`, `LDAP_CONFIG_BIND_PW`, `LDAP_START_TLS`, `LDAP_INSECURE`,
-`LDAP_SASL_EXTERNAL`, `LDAP_TIMEOUT`, `LDAP_CA_FILE`.
+`LDAP_SASL_EXTERNAL`, `LDAP_TIMEOUT`, `LDAP_CA_FILE`, `LDAP_CLIENT_CERT`,
+`LDAP_CLIENT_KEY`.
 
 A boolean that does not parse is an **error**, not a shrug: `LDAP_START_TLS=yes`
 used to be ignored and left the bind in cleartext.
@@ -97,6 +100,12 @@ rather than reaching for `insecure: true`: verification stays on, against the
 anchor you chose. `tls export` writes that file. Setting **both** is refused -
 `insecure` turns verification off outright, so the CA would be loaded and then
 never consulted, which looks like pinning and is not.
+
+**Client certificate.** `client_cert` + `client_key` present a certificate to
+the server (mutual TLS), which is what `olcTLSVerifyClient: demand` asks for and
+what lets **SASL EXTERNAL authenticate over `ldaps://`** the way peer
+credentials do over `ldapi://` - no stored password anywhere. Either half alone
+is refused: a certificate without its key proves nothing.
 
 **Secrets.** `LDAP_BIND_PW_FILE` and `LDAP_CONFIG_BIND_PW_FILE` read the password
 from a file (first line) instead of the environment - what you want for a Docker
@@ -336,6 +345,7 @@ credential is, so this works from a machine with no account yet.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tls show`                               | every certificate presented: its role in the chain, the names it covers, expiry, and the SHA-256 in `openssl x509 -fingerprint -sha256` format. The last line says whether the chain validates **on its own**, i.e. whether `export` is enough for a client |
 | `tls export [file] [--full]`             | PEM to `<file>`, or to stdout when none is named (so it pipes). Exports the **CA** certificates by default - what a client installs, and what keeps working when the server certificate is renewed. `--full` writes the whole chain, for pinning or an archive |
+| `tls check [--days N]`                   | **exits non-zero** when a certificate has expired, expires within `--days` (default 30), or the chain does not validate the host it serves - one line for a cron job or a monitoring probe                                                                 |
 | `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces. It cannot export anything - that is `tls export`                                                                                            |
 | `tls ca-list [--base DN]`                | CA certificates the **directory publishes** in the tree (`cACertificate`, RFC 4523 `pkiCA` or the older `certificationAuthority`) - a different source from the handshake, and one most directories simply do not use                                      |
 | `tls ca-export [file] [--base DN]`       | those, as PEM. What the organization publishes, carried over a connection only as trustworthy as the one you made - compare the fingerprints out of band                                                                                                 |
@@ -345,6 +355,8 @@ credential is, so this works from a machine with no account yet.
 openldap-cli --profile prod tls export ca.pem
 # then point a profile at it and the connection verifies
 LDAP_CA_FILE=ca.pem openldap-cli --profile prod whoami
+# and watch for the renewal nobody noticed
+openldap-cli --profile prod tls check --days 30 || notify "LDAPS cert needs attention"
 ```
 
 **Trust on first use.** The fetch cannot verify the certificate it is fetching -

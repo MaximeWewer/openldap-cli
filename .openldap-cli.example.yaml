@@ -58,6 +58,17 @@ profiles:
     mail_domain: example.org
     timeout: 2m             # cap on the dial and on each operation (default 2m)
 
+  # Passwordless over the network: SASL EXTERNAL with a client certificate.
+  # The server maps the certificate's subject to a DN (olcAuthzRegexp), so no
+  # password is stored anywhere. Needs olcTLSVerifyClient on the server.
+  mtls:
+    url: ldaps://ldap.example.org:636
+    base_dn: dc=example,dc=org
+    sasl_external: true
+    ca_file: /etc/ssl/certs/ldap-ca.pem        # from `openldap-cli tls export`
+    client_cert: /etc/ssl/certs/ldap-client.pem
+    client_key: /etc/ssl/private/ldap-client.key
+
   # Passwordless local admin: SASL EXTERNAL over the ldapi:// Unix socket. Run as
   # root on the LDAP host; the identity comes from peer creds, so no bind_dn /
   # bind_pw / config_bind_dn. (Server must map the peer identity to a priv DN.)
