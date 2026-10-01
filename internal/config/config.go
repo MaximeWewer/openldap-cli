@@ -31,6 +31,7 @@ type Profile struct {
 	MailDomain string `yaml:"mail_domain"` // example.org
 	StartTLS   bool   `yaml:"start_tls"`   // upgrade ldap:// to TLS
 	Insecure   bool   `yaml:"insecure"`    // skip TLS cert verification (dev only)
+	CAFile     string `yaml:"ca_file"`     // PEM trust anchor, e.g. from `tls export`
 
 	// SASLExternal binds via SASL/EXTERNAL instead of a simple bind — the
 	// identity comes from the transport (Unix-socket peer creds over ldapi://,
@@ -181,6 +182,7 @@ func applyEnv(p *Profile) error {
 	envStr(&p.GroupOU, "LDAP_GROUP_OU")
 	envStr(&p.PolicyOU, "LDAP_POLICY_OU")
 	envStr(&p.MailDomain, "LDAP_MAIL_DOMAIN")
+	envStr(&p.CAFile, "LDAP_CA_FILE")
 	if v, ok := os.LookupEnv("LDAP_TIMEOUT"); ok {
 		d, err := time.ParseDuration(v)
 		if err != nil {

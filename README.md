@@ -75,6 +75,7 @@ profiles:
     group_ou: ou=groups
     policy_ou: ou=policies
     mail_domain: example.org
+    ca_file: /etc/ssl/certs/ldap-ca.pem            # private CA (see `tls export`)
     timeout: 2m                                    # per-operation cap (default 2m)
     # second bind for cn=config writes (svc ACL, ops reads):
     config_bind_dn: cn=adminconfig,cn=config
@@ -84,10 +85,15 @@ profiles:
 Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 `LDAP_USER_OU`, `LDAP_GROUP_OU`, `LDAP_POLICY_OU`, `LDAP_MAIL_DOMAIN`,
 `LDAP_CONFIG_BIND_DN`, `LDAP_CONFIG_BIND_PW`, `LDAP_START_TLS`, `LDAP_INSECURE`,
-`LDAP_SASL_EXTERNAL`, `LDAP_TIMEOUT`.
+`LDAP_SASL_EXTERNAL`, `LDAP_TIMEOUT`, `LDAP_CA_FILE`.
 
 A boolean that does not parse is an **error**, not a shrug: `LDAP_START_TLS=yes`
 used to be ignored and left the bind in cleartext.
+
+**Private CA.** When the directory's certificate is signed by a CA the host does
+not trust system-wide, point `ca_file` (or `LDAP_CA_FILE`) at a PEM bundle
+rather than reaching for `insecure: true`: verification stays on, against the
+anchor you chose. `tls export` writes that file.
 
 **Secrets.** `LDAP_BIND_PW_FILE` and `LDAP_CONFIG_BIND_PW_FILE` read the password
 from a file (first line) instead of the environment - what you want for a Docker
@@ -314,6 +320,39 @@ access, which is wider than whatever was being revoked.
 | `config limits delete [--db] --for <selector>`                                                                                                            | remove every `olcLimits` clause for that identity (every one: an older CLI appended duplicates)                                                                                                                                                                                                                                                                                                                                |
 | `config limits lint [--db]`                                                                                                                               | report `olcLimits` clauses slapd can never reach - the ordering trap, same as `config acl lint`                                                                                                                                                                                                                                                                                                                                |
 
+### tls (certificates - no bind needed)
+
+A client that must reach the directory over LDAPS needs the CA that signed the
+server, and that CA lives in a file on the server host. LDAP publishes the
+**path** (`olcTLSCACertificateFile`) but never the file, so the only
+protocol-level source of the certificate bytes is the handshake itself - which
+is what these read. No bind is involved: certificates are exchanged before any
+credential is, so this works from a machine with no account yet.
+
+| Command                                  | Notes                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tls show`                               | every certificate presented: its role in the chain, the names it covers, expiry, and the SHA-256 in `openssl x509 -fingerprint -sha256` format. The last line says whether the chain validates **on its own**, i.e. whether `export` is enough for a client |
+| `tls export [file] [--full]`             | PEM to `<file>`, or to stdout when none is named (so it pipes). Exports the **CA** certificates by default - what a client installs, and what keeps working when the server certificate is renewed. `--full` writes the whole chain, for pinning or an archive |
+| `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces. It cannot export anything - that is `tls export`                                                                                            |
+
+```bash
+# hand a client the trust anchor it needs
+openldap-cli --profile prod tls export ca.pem
+# then point a profile at it and the connection verifies
+LDAP_CA_FILE=ca.pem openldap-cli --profile prod whoami
+```
+
+**Trust on first use.** The fetch cannot verify the certificate it is fetching -
+there is nothing to verify against yet, which is the whole point. Compare the
+printed SHA-256 against the server's own record, out of band, before installing
+it anywhere that matters.
+
+**A missing root is normal.** A server MAY omit the root CA from the chain
+(RFC 8446 s4.4.2), and most do when the certificate comes from a corporate or
+public PKI. `tls show` says so plainly and `tls export` refuses rather than
+writing a file that anchors nothing - get the root from whoever runs that PKI,
+or `--full` and pin the server certificate instead.
+
 ### backup (logical LDIF over the wire - no docker/shell/volume needed)
 
 | Command                                   | Notes                                                                                                                                                                                                                                                                                                                                                                  |
@@ -448,6 +487,7 @@ internal/
   overlay/  overlay catalog + defaults         (unit-tested)
   humanize/ byte sizes                         (unit-tested)
   ldaptime/ generalizedTime                    (unit-tested)
+  tlsx/     certificate chain fetch + description (unit-tested)
   output/   text/json/yaml rendering + terminal-escape sanitizing
 tests/      faithful test OpenLDAP             (compose + bootstrap)
 ```

@@ -50,6 +50,9 @@ profiles:
     base_dn: dc=example,dc=org
     bind_dn: cn=admin,dc=example,dc=org
     # no bind_pw here: export LDAP_BIND_PW_FILE=/run/secrets/ldap-bind-pw
+    # private CA? point at a PEM bundle instead of insecure: true.
+    # `openldap-cli tls export ca.pem` writes it.
+    ca_file: /etc/ssl/certs/ldap-ca.pem
     user_ou: ou=people
     group_ou: ou=groups
     mail_domain: example.org

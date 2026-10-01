@@ -2,6 +2,8 @@ package ldapx
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/go-ldap/ldap/v3"
@@ -84,5 +86,21 @@ func TestEntryLookupIsCaseInsensitive(t *testing.T) {
 	// Names keeps the server's own spelling, so output shows what it sent
 	if names := e.Names(); names[0] != "objectclass" || names[1] != "CN" {
 		t.Errorf("Names() = %v, want the server spelling", names)
+	}
+}
+
+func TestCAPoolRejectsWhatIsNotATrustAnchor(t *testing.T) {
+	dir := t.TempDir()
+	junk := filepath.Join(dir, "junk.pem")
+	if err := os.WriteFile(junk, []byte("this is not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// a ca_file that loads nothing must fail loudly: silently falling back to
+	// the system roots would verify against anchors the operator did not choose
+	if _, err := caPool(junk); err == nil {
+		t.Error("caPool accepted a file holding no PEM certificate")
+	}
+	if _, err := caPool(filepath.Join(dir, "absent.pem")); err == nil {
+		t.Error("caPool accepted a missing file")
 	}
 }

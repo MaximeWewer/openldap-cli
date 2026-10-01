@@ -4,9 +4,11 @@ package ldapx
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -37,6 +39,16 @@ func Connect(p *config.Profile) (*Client, error) {
 	tlsCfg := &tls.Config{
 		MinVersion:         tls.VersionTLS12,
 		InsecureSkipVerify: p.Insecure, // #nosec G402 -- opt-in dev flag (insecure: true / LDAP_INSECURE)
+	}
+	// a private CA that the host does not trust system-wide: verify against this
+	// file instead of turning verification off, which is the only other way a
+	// self-hosted directory used to be reachable. `tls export` writes this file.
+	if p.CAFile != "" {
+		pool, cerr := caPool(p.CAFile)
+		if cerr != nil {
+			return nil, cerr
+		}
+		tlsCfg.RootCAs = pool
 	}
 
 	// bound the dial and every later operation: without this a server that
@@ -77,6 +89,19 @@ func Connect(p *config.Profile) (*Client, error) {
 }
 
 // Config returns the profile this client is bound with.
+// caPool loads a PEM bundle as the only trust anchor for the connection.
+func caPool(path string) (*x509.CertPool, error) {
+	pem, err := os.ReadFile(path) // #nosec G304 -- path is the operator's chosen CA bundle
+	if err != nil {
+		return nil, fmt.Errorf("read ca_file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(pem) {
+		return nil, fmt.Errorf("ca_file %s holds no PEM certificate", path)
+	}
+	return pool, nil
+}
+
 func (c *Client) Config() *config.Profile { return c.cfg }
 
 // Close tears down the connection.
