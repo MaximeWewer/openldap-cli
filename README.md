@@ -137,6 +137,35 @@ This works only if the server maps the peer identity to a privileged DN
 (`olcAuthzRegexp` + a `cn=config` ACL granting `gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth`);
 a custom socket path is `url: ldapi://%2Frun%2Fslapd%2Fldapi`.
 
+**Over the network, too.** SASL EXTERNAL is not limited to the Unix socket: with
+a client certificate it authenticates over `ldaps://`, again with no password
+stored anywhere.
+
+```yaml
+profiles:
+  mtls:
+    url: ldaps://ldap.example.org:636
+    base_dn: dc=example,dc=org
+    sasl_external: true
+    ca_file: /etc/ssl/certs/ldap-ca.pem          # from `tls export`
+    client_cert: /etc/ssl/certs/ldap-client.pem
+    client_key: /etc/ssl/private/ldap-client.key
+```
+
+Two things have to be true server-side, and both are easy to miss:
+
+- **`olcTLSVerifyClient` must be set** (`allow`, `try` or `demand`). Left at its
+  default `never`, slapd never validates the certificate, so there is no external
+  identity and `EXTERNAL` does not even appear in `supportedSASLMechanisms` -
+  the bind fails with `SASL(-4): no mechanism available`, which reads like a
+  missing SASL plugin and is not one.
+- **An `olcAuthzRegexp`** maps the certificate's subject onto a real DN.
+  Without it the bind succeeds as the subject itself, which matches no entry and
+  so can do nothing. Note slapd renders an X.509 subject in **reverse** order:
+  `CN=svc,O=Acme` becomes `o=Acme,cn=svc`.
+
+The e2e suite exercises exactly this against the test server.
+
 ### Switching profiles
 
 ```bash

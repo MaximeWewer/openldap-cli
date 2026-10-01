@@ -103,7 +103,11 @@ if [[ -z "$(ls -A ./testdata/slapd.d 2>/dev/null)" ]]; then
   # point cn=config at the certificates, inside the first record
   if [[ $TLS -eq 1 ]]; then
     grep -q '^olcArgsFile:' "$combined" || { echo "no olcArgsFile anchor in $combined" >&2; exit 1; }
-    sed -i '0,/^olcArgsFile:.*$/s||&\nolcTLSCACertificateFile: /etc/openldap/certs/ca.crt\nolcTLSCertificateFile: /etc/openldap/certs/server.crt\nolcTLSCertificateKeyFile: /etc/openldap/certs/server.key|' "$combined"
+    # olcAuthzRegexp maps the client certificate's subject onto a real identity,
+    # which is what turns SASL EXTERNAL over ldaps:// into a usable login rather
+    # than a bind as a DN that exists nowhere. slapd renders an X.509 subject in
+    # reverse order, hence "o=...,cn=...". Harmless when no SASL bind happens.
+    sed -i '0,/^olcArgsFile:.*$/s||&\nolcTLSCACertificateFile: /etc/openldap/certs/ca.crt\nolcTLSCertificateFile: /etc/openldap/certs/server.crt\nolcTLSCertificateKeyFile: /etc/openldap/certs/server.key\nolcAuthzRegexp: "o=openldap-cli test,cn=e2e.client" "cn=admin,ou=users,dc=example,dc=org"|' "$combined"
   fi
 
   echo ">> slapadd cn=config (-n0)"

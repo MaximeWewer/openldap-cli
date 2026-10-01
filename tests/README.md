@@ -33,7 +33,13 @@ points `cn=config` at them, and publishes the CA in the tree as
 and `cACertificate` - have something to return.
 
 A client certificate (`certs/client.crt` + `.key`, signed by the same CA) comes
-with it, so mutual TLS - `client_cert`/`client_key` - is exercisable too.
+with it, so mutual TLS - `client_cert`/`client_key` - is exercisable too, and an
+`olcAuthzRegexp` maps its subject onto `cn=admin,ou=users,dc=example,dc=org` so
+**SASL EXTERNAL over `ldaps://`** logs in as a real identity with no password.
+
+`olcTLSVerifyClient` is deliberately left unset: `demand` would force every
+connection to present a certificate. The e2e suite turns it on for the one
+subtest that needs it and puts it back.
 
 Keys are world-readable and the CA is self-signed on purpose. This instance is
 disposable; none of it is a template for anything real.

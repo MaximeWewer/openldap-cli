@@ -1246,6 +1246,25 @@ func TestCLI(t *testing.T) {
 				"LDAP_CLIENT_KEY=" + filepath.Join(certDir, "client.key"),
 			}
 			has(t, runEnv(t, with, admin, adPW, "whoami"), "cn=admin")
+
+			// And the point of presenting one: SASL EXTERNAL authenticates off
+			// the certificate alone. The bind credentials passed here are
+			// deliberately WRONG - if the login still works, it worked without
+			// them, which is the whole claim.
+			ext := append(append([]string{}, with...), "LDAP_SASL_EXTERNAL=true")
+			who := runEnv(t, ext, "cn=nobody,dc=example,dc=org", "not-a-password", "whoami")
+			// olcAuthzRegexp maps the certificate subject onto a real identity,
+			// so this is the mapped DN and not "o=...,cn=e2e.client"
+			has(t, who, "dn:cn=admin,ou=users,dc=example,dc=org")
+
+			// and that identity can actually do things
+			listed := runEnv(t, ext, "cn=nobody,dc=example,dc=org", "not-a-password", "users", "list")
+			has(t, listed, "users)")
+
+			// without a certificate there is no external identity to bind as
+			if _, _, err := tryEnv([]string{ldaps, ca, "LDAP_SASL_EXTERNAL=true"}, admin, adPW, "whoami"); err == nil {
+				t.Error("SASL EXTERNAL succeeded with no client certificate")
+			}
 		})
 
 		t.Run("a-client-cert-without-its-key-is-refused", func(t *testing.T) {
