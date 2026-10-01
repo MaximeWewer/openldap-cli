@@ -136,11 +136,19 @@ func loadConfig() (*config.Profile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.Insecurities != "" {
-		log.Warn().Msg(config.Insecurities)
+	// a command that uses both binds loads the config twice; say each thing once
+	for _, w := range config.Insecurities {
+		if warned[w] {
+			continue
+		}
+		warned[w] = true
+		log.Warn().Msg(w)
 	}
 	return p, nil
 }
+
+// warned remembers what loadConfig has already said this run.
+var warned = map[string]bool{}
 
 // connect loads config and opens a bound LDAP client. Callers must Close it.
 func connect() (*ldapx.Client, error) {

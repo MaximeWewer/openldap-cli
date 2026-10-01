@@ -419,7 +419,9 @@ var tlsCheckCmd = &cobra.Command{
 		"the chain does not validate the hostname it is serving.\n\n" +
 		"It verifies against the chain the server itself presents, so it catches the\n" +
 		"renewal nobody noticed - not whether this particular host happens to trust\n" +
-		"the CA. Point `ca_file` at your anchor and the usual commands do the rest.",
+		"the CA. Point `ca_file` at your anchor and the usual commands do the rest.\n\n" +
+		"A `client_cert` on the profile is checked for expiry too: it is not part of\n" +
+		"what the server presents, and letting it lapse locks you out just as hard.",
 	Args: cobra.NoArgs,
 	Example: "  openldap-cli --profile prod tls check --days 30\n" +
 		"  # in cron: mail only when it has something to say\n" +
@@ -443,6 +445,35 @@ var tlsCheckCmd = &cobra.Command{
 					fmt.Sprintf("%s (%s) expires in %d days, on %s", role(c, i), c.Subject.String(), days, c.NotAfter.UTC().Format(time.RFC3339)))
 			}
 		}
+		// the client certificate too: it is not in the chain the server presents,
+		// and letting it lapse locks you out exactly as hard
+		cfg, cerr := loadConfig()
+		if cerr != nil {
+			return cerr
+		}
+		if cfg.ClientCert != "" {
+			cc, lerr := tlsx.LoadPEMFile(cfg.ClientCert)
+			if lerr != nil {
+				res.Problems = append(res.Problems, "client certificate: "+lerr.Error())
+			} else {
+				expired, days := tlsx.Expiry(cc, now)
+				res.Chain = append(res.Chain, certInfo{
+					Position: -1, Role: "client certificate (this profile)",
+					Subject: cc.Subject.String(), Issuer: cc.Issuer.String(), SANs: tlsx.SANs(cc),
+					NotAfter: cc.NotAfter.UTC().Format(time.RFC3339), DaysLeft: days,
+					Expired: expired, Fingerprint: tlsx.Fingerprint(cc),
+				})
+				switch {
+				case expired:
+					res.Problems = append(res.Problems, fmt.Sprintf(
+						"the client certificate (%s) EXPIRED on %s", cc.Subject.String(), cc.NotAfter.UTC().Format(time.RFC3339)))
+				case days < tlsCheckDays:
+					res.Problems = append(res.Problems, fmt.Sprintf(
+						"the client certificate (%s) expires in %d days, on %s", cc.Subject.String(), days, cc.NotAfter.UTC().Format(time.RFC3339)))
+				}
+			}
+		}
+
 		if verr := chain.Verify(); verr != nil {
 			// a chain missing its root is not a fault of the server: say what it
 			// is rather than reporting a renewal problem that does not exist

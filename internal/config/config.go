@@ -9,6 +9,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,8 +86,6 @@ func Load(path, profile string) (*Profile, error) {
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	Insecurities = insecureModeWarning(path, f.Profiles)
-
 	if profile == "" {
 		if profile = f.Default; profile == "" {
 			profile = "default"
@@ -103,6 +103,9 @@ func Load(path, profile string) (*Profile, error) {
 	if p.BaseDN == "" {
 		return nil, fmt.Errorf("no base_dn for profile %q (set it in %s or LDAP_BASE_DN)", profile, path)
 	}
+	// computed on the RESOLVED profile: env overrides decide whether anything
+	// is actually at risk, so checking the file alone would miss and misreport
+	Insecurities = warnings(path, f.Profiles, &p)
 	return &p, nil
 }
 
@@ -267,21 +270,40 @@ func envBool(dst *bool, key string) error {
 	return nil
 }
 
-// Insecurities holds the warning Load raised about the config file itself, or
-// "" when there is nothing to say. The caller logs it: a config file holding a
-// bind password is a credential store, and leaving it readable by everyone on
-// the host defeats every other precaution here.
-var Insecurities string
+// Insecurities lists what Load noticed about the way this profile is set up:
+// secrets a bystander can read, or credentials about to cross the network in
+// the clear. None of it stops the command - the operator may well have reasons -
+// but none of it should happen silently either. The caller logs each entry.
+var Insecurities []string
 
-func insecureModeWarning(path string, profiles map[string]Profile) string {
-	holdsSecret := false
-	for _, p := range profiles {
-		if p.BindPW != "" || p.ConfigBindPW != "" {
-			holdsSecret = true
-			break
+func warnings(path string, profiles map[string]Profile, p *Profile) []string {
+	var out []string
+	if w := fileModeWarning(path, holdsSecret(profiles), "holds a bind password"); w != "" {
+		out = append(out, w)
+	}
+	if p.ClientKey != "" {
+		if w := fileModeWarning(p.ClientKey, true, "is a private key"); w != "" {
+			out = append(out, w)
 		}
 	}
-	if !holdsSecret {
+	if w := cleartextBindWarning(p); w != "" {
+		out = append(out, w)
+	}
+	return out
+}
+
+func holdsSecret(profiles map[string]Profile) bool {
+	for _, p := range profiles {
+		if p.BindPW != "" || p.ConfigBindPW != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// fileModeWarning reports a secret readable by anyone but its owner.
+func fileModeWarning(path string, isSecret bool, what string) string {
+	if !isSecret || path == "" {
 		return ""
 	}
 	info, err := os.Stat(path)
@@ -289,7 +311,49 @@ func insecureModeWarning(path string, profiles map[string]Profile) string {
 		return ""
 	}
 	if mode := info.Mode().Perm(); mode&0o077 != 0 {
-		return fmt.Sprintf("%s holds a bind password and is mode %#o, readable beyond its owner; chmod 600 it", path, mode)
+		return fmt.Sprintf("%s %s and is mode %#o, readable beyond its owner; chmod 600 it", path, what, mode)
 	}
 	return ""
+}
+
+// cleartextBindWarning catches the case the rest of the TLS work exists to
+// avoid: a simple bind sending its password over an unencrypted connection.
+//
+// It stays quiet for a loopback address. Running against a directory on the
+// same machine is the normal development shape and carries no network to
+// eavesdrop on; warning there would train people to ignore the warning that
+// matters.
+func cleartextBindWarning(p *Profile) string {
+	if p.StartTLS || p.SASLExternal {
+		return ""
+	}
+	u, err := url.Parse(p.URL)
+	if err != nil || u.Scheme != "ldap" { // ldaps is encrypted, ldapi is a local socket
+		return ""
+	}
+	host := u.Hostname()
+	if isLoopback(host) {
+		return ""
+	}
+	var who string
+	switch {
+	case p.BindPW != "" && p.ConfigBindPW != "":
+		who = "the bind and config-bind passwords"
+	case p.BindPW != "":
+		who = "the bind password"
+	case p.ConfigBindPW != "":
+		who = "the config-bind password"
+	default:
+		return "" // nothing secret crosses the wire
+	}
+	return fmt.Sprintf("%s goes to %s in the clear: %s carries no encryption. "+
+		"Use ldaps://, or start_tls: true", who, host, p.URL)
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

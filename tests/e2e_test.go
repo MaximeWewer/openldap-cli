@@ -1267,6 +1267,28 @@ func TestCLI(t *testing.T) {
 			}
 		})
 
+		t.Run("check-covers-the-client-certificate-too", func(t *testing.T) {
+			certDir, _ := filepath.Abs("certs")
+			if _, err := os.Stat(filepath.Join(certDir, "client.crt")); err != nil {
+				t.Skip("no client certificate in tests/certs")
+			}
+			with := []string{
+				ldaps,
+				"LDAP_CA_FILE=" + filepath.Join(certDir, "ca.crt"),
+				"LDAP_CLIENT_CERT=" + filepath.Join(certDir, "client.crt"),
+				"LDAP_CLIENT_KEY=" + filepath.Join(certDir, "client.key"),
+			}
+			has(t, runEnv(t, with, admin, adPW, "tls", "check", "--days", "30"), "OK")
+
+			// it is not part of the chain the server presents, so it only shows
+			// up if check looks for it on purpose
+			so, _, err := tryEnv(with, admin, adPW, "tls", "check", "--days", "99999")
+			if err == nil {
+				t.Error("tls check exited 0 with the client certificate inside the threshold")
+			}
+			has(t, so, "client certificate")
+		})
+
 		t.Run("a-client-cert-without-its-key-is-refused", func(t *testing.T) {
 			certDir, _ := filepath.Abs("certs")
 			_, se, err := tryEnv([]string{ldaps, "LDAP_CLIENT_CERT=" + filepath.Join(certDir, "client.crt")},
@@ -1275,6 +1297,48 @@ func TestCLI(t *testing.T) {
 				t.Fatal("a certificate with no key was accepted")
 			}
 			has(t, se, "go together")
+		})
+	})
+
+	// The warnings exist to break a silence, so what matters is that they fire
+	// on the risky shape and stay quiet on the ordinary one.
+	t.Run("insecure-setup-warnings", func(t *testing.T) {
+		t.Run("cleartext-bind-to-a-remote-host", func(t *testing.T) {
+			// unreachable on purpose: the warning is raised while the config is
+			// read, before anything is dialled
+			// the helper pins --log-level error; a later flag wins, and these
+			// are warnings
+			_, se, _ := tryEnv([]string{"LDAP_URL=ldap://ldap.invalid:389"},
+				admin, adPW, "--log-level", "warn", "whoami")
+			has(t, se, "in the clear")
+		})
+
+		t.Run("silent-over-loopback", func(t *testing.T) {
+			// every other test in this file binds this way; warning here would
+			// train people to ignore the warning that matters
+			_, se, err := try(admin, adPW, "--log-level", "warn", "whoami")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(se, "in the clear") {
+				t.Errorf("warned about a loopback bind:\n%s", se)
+			}
+		})
+
+		t.Run("world-readable-client-key", func(t *testing.T) {
+			dir := t.TempDir()
+			key := filepath.Join(dir, "client.key")
+			if err := os.WriteFile(key, []byte("-----BEGIN PRIVATE KEY-----\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// the key is never loaded: an unreachable URL is enough, the check
+			// happens on the profile
+			_, se, _ := tryEnv([]string{
+				"LDAP_URL=ldaps://ldap.invalid:636",
+				"LDAP_CLIENT_CERT=" + filepath.Join(dir, "client.crt"),
+				"LDAP_CLIENT_KEY=" + key,
+			}, admin, adPW, "--log-level", "warn", "whoami")
+			has(t, se, "private key")
 		})
 	})
 

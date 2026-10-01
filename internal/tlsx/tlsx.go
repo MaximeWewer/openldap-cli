@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -244,6 +245,23 @@ func ParseDER(values []string) ([]*x509.Certificate, error) {
 		out = append(out, cert)
 	}
 	return out, nil
+}
+
+// LoadPEMFile reads the first certificate out of a PEM file - a client
+// certificate, say, whose own expiry locks you out just as surely as the
+// server's does.
+func LoadPEMFile(path string) (*x509.Certificate, error) {
+	raw, err := os.ReadFile(path) // #nosec G304 -- path is the operator's chosen certificate
+	if err != nil {
+		return nil, err
+	}
+	for block, rest := pem.Decode(raw); block != nil; block, rest = pem.Decode(rest) {
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		return x509.ParseCertificate(block.Bytes)
+	}
+	return nil, fmt.Errorf("%s holds no PEM certificate", path)
 }
 
 // Expiry describes how a certificate sits against a moment in time.

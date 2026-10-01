@@ -94,6 +94,16 @@ Env overrides: `LDAP_URL`, `LDAP_BASE_DN`, `LDAP_BIND_DN`, `LDAP_BIND_PW`,
 A boolean that does not parse is an **error**, not a shrug: `LDAP_START_TLS=yes`
 used to be ignored and left the bind in cleartext.
 
+**What the CLI warns about.** None of these stop a command - you may have your
+reasons - but none of them happen silently either:
+
+- a **password bind over `ldap://`** with no `start_tls`, when the host is not
+  loopback. The password crosses the network in the clear. Loopback stays quiet:
+  running against a directory on the same machine is the ordinary development
+  shape, and warning there would train you to ignore the warning that matters.
+- a **config file or `client_key` readable beyond its owner** - a private key
+  most of all.
+
 **Private CA.** When the directory's certificate is signed by a CA the host does
 not trust system-wide, point `ca_file` (or `LDAP_CA_FILE`) at a PEM bundle
 rather than reaching for `insecure: true`: verification stays on, against the
@@ -374,7 +384,7 @@ credential is, so this works from a machine with no account yet.
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `tls show`                               | every certificate presented: its role in the chain, the names it covers, expiry, and the SHA-256 in `openssl x509 -fingerprint -sha256` format. The last line says whether the chain validates **on its own**, i.e. whether `export` is enough for a client |
 | `tls export [file] [--full]`             | PEM to `<file>`, or to stdout when none is named (so it pipes). Exports the **CA** certificates by default - what a client installs, and what keeps working when the server certificate is renewed. `--full` writes the whole chain, for pinning or an archive |
-| `tls check [--days N]`                   | **exits non-zero** when a certificate has expired, expires within `--days` (default 30), or the chain does not validate the host it serves - one line for a cron job or a monitoring probe                                                                 |
+| `tls check [--days N]`                   | **exits non-zero** when a certificate has expired, expires within `--days` (default 30), or the chain does not validate the host it serves - one line for a cron job or a monitoring probe. A profile `client_cert` is checked too: it is not in what the server presents, and letting it lapse locks you out just as hard |
 | `tls config`                             | the `olcTLS*` settings (config bind): **paths on the server host**, for knowing which file a renewal replaces. It cannot export anything - that is `tls export`                                                                                            |
 | `tls ca-list [--base DN]`                | CA certificates the **directory publishes** in the tree (`cACertificate`, RFC 4523 `pkiCA` or the older `certificationAuthority`) - a different source from the handshake, and one most directories simply do not use                                      |
 | `tls ca-export [file] [--base DN]`       | those, as PEM. What the organization publishes, carried over a connection only as trustworthy as the one you made - compare the fingerprints out of band                                                                                                 |

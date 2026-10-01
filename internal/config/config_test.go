@@ -188,7 +188,7 @@ func TestWarnsOnAWorldReadableConfigHoldingASecret(t *testing.T) {
 	if _, err := Load(path, "dev"); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if Insecurities == "" {
+	if len(Insecurities) == 0 {
 		t.Error("no warning for a 0644 config file holding bind_pw")
 	}
 
@@ -198,7 +198,94 @@ func TestWarnsOnAWorldReadableConfigHoldingASecret(t *testing.T) {
 	if _, err := Load(path, "dev"); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if Insecurities != "" {
+	if len(Insecurities) != 0 {
 		t.Errorf("warned about a 0600 config file: %s", Insecurities)
+	}
+}
+
+// warnedAbout reports whether any warning mentions sub.
+func warnedAbout(sub string) bool {
+	for _, w := range Insecurities {
+		if strings.Contains(w, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWarnsOnACleartextBindOverTheNetwork(t *testing.T) {
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_BIND_DN", "cn=admin,dc=example,dc=org")
+	t.Setenv("LDAP_BIND_PW", "secret")
+	absent := filepath.Join(t.TempDir(), "absent.yaml")
+
+	cases := map[string]bool{
+		"ldap://ldap.example.org:389":  true,  // the whole point
+		"ldaps://ldap.example.org:636": false, // encrypted
+		"ldap://localhost:389":         false, // no network to listen on
+		"ldap://127.0.0.1:389":         false,
+		"ldap://[::1]:389":             false,
+	}
+	for url, want := range cases {
+		t.Setenv("LDAP_URL", url)
+		if _, err := Load(absent, ""); err != nil {
+			t.Fatalf("Load(%s): %v", url, err)
+		}
+		if got := warnedAbout("in the clear"); got != want {
+			t.Errorf("%s: cleartext warning = %v, want %v (%v)", url, got, want, Insecurities)
+		}
+	}
+}
+
+func TestNoCleartextWarningWithoutASecretOrWithTLSUpgrade(t *testing.T) {
+	t.Setenv("LDAP_URL", "ldap://ldap.example.org:389")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	absent := filepath.Join(t.TempDir(), "absent.yaml")
+
+	// an anonymous bind sends no password, so nothing is at risk
+	if _, err := Load(absent, ""); err != nil {
+		t.Fatal(err)
+	}
+	if warnedAbout("in the clear") {
+		t.Errorf("warned about an anonymous bind: %v", Insecurities)
+	}
+
+	// and StartTLS encrypts before the bind happens
+	t.Setenv("LDAP_BIND_DN", "cn=admin,dc=example,dc=org")
+	t.Setenv("LDAP_BIND_PW", "secret")
+	t.Setenv("LDAP_START_TLS", "true")
+	if _, err := Load(absent, ""); err != nil {
+		t.Fatal(err)
+	}
+	if warnedAbout("in the clear") {
+		t.Errorf("warned despite start_tls: %v", Insecurities)
+	}
+}
+
+func TestWarnsOnAWorldReadableClientKey(t *testing.T) {
+	dir := t.TempDir()
+	key := filepath.Join(dir, "client.key")
+	if err := os.WriteFile(key, []byte("-----BEGIN PRIVATE KEY-----\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LDAP_URL", "ldaps://ldap.example.org:636")
+	t.Setenv("LDAP_BASE_DN", "dc=example,dc=org")
+	t.Setenv("LDAP_CLIENT_KEY", key)
+
+	if _, err := Load(filepath.Join(dir, "absent.yaml"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if !warnedAbout("private key") {
+		t.Errorf("no warning for a 0644 client key: %v", Insecurities)
+	}
+
+	if err := os.Chmod(key, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(filepath.Join(dir, "absent.yaml"), ""); err != nil {
+		t.Fatal(err)
+	}
+	if warnedAbout("private key") {
+		t.Errorf("warned about a 0600 client key: %v", Insecurities)
 	}
 }
