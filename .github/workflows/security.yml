@@ -23,7 +23,7 @@ jobs:
           cache: true
 
       - name: Run gosec
-        uses: securego/gosec@v2.29.0
+        uses: securego/gosec@v2.30.0
         with:
           # -no-fail: report only (findings show in the Security tab, CI stays green)
           # scope to Go packages so it skips tests/data (container runtime, not Go)
